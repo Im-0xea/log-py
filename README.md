@@ -27,16 +27,20 @@ webhook = "https://discord.com/api/webhooks/..."
 
 ## Usage
 
+Log through "argument" mode:
+
 ```sh
-# log through "argument" mode
 # usage: logpy <SUBSTANCE> <DOSAGE> <ROA> [TIME...] [OPTIONS] )
 logpy Methamphetamine ~50mg Intravenous --note "reused-syringe reused-needle omg-my-favorite"
 logpy Methamphetamine 50mg Intravenous --site left-cephalic --salt Hydrochloride
 logpy LSD 100μg sublingual 2 hours ago
 logpy LSD 100μg sublingual -sa tartrate yesterday at 10pm
 logpy MDMA 120mg oral -sa hcl 2025-12-04 10:00
+```
 
-# log via "flags" mode:
+Log through "flags" mode:
+
+```sh
 logpy --flags --substance LSD --dosage 100μg --roa sublingual
 logpy --flags --substance Ketamine --dosage 25mg --roa intramuscular --volume-ml 1.5
 ```
@@ -47,19 +51,23 @@ Use `--mixture` or `--kind mixture` to log several compounds combined in one syr
 logpy --mixture --substance "Ketamine; Midazolam" --dosage "25mg; 1mg" --roa intramuscular --volume-ml 1.5
 ```
 
-# log through menu modes for fast navigation and a more forgiving and user-friendly interface
-# - "prompt" mode
+Log through menu modes (fast navigation and a more user-friendly and forgiving interface):
+
+```sh
+# "prompt" mode
 logpy --prompt
-# - "dmenu" mode
+
+# "dmenu" mode
 logpy --dmenu
-# - "bemenu" mode
+
+# "bemenu" mode
 logpy --bemenu
-# - "fuzzel" mode
+
+# "fuzzel" mode
 logpy --fuzzel
 ```
 
-
-## Options
+## Flags
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -83,6 +91,6 @@ logpy --fuzzel
 | `--webhook` | `-w` | Discord webhook URL |
 | `--config` | `-c` | config file path |
 
-## CSV format
+## Ingestion CSV format
 
 Columns: `timestamp, user, substance, dosage, roa, site, salt, note`
