@@ -1,11 +1,18 @@
 # logpy
 
-CLI for logging psychoactive substance ingestions to a CSV file, with optional Discord webhook notifications.
+CLI for logging psychoactive substance ingestions to a CSV file and optionaly to a public logger (via discord webhook).
 
 ## Installation
 
+### nix
+
 ```sh
 nix shell
+```
+
+### uv
+```sh
+uv pip install .
 ```
 
 ## Configuration
@@ -21,56 +28,36 @@ webhook = "https://discord.com/api/webhooks/..."
 ## Usage
 
 ```sh
-logpy SUBSTANCE DOSAGE ROA [TIME...]
-```
-
-`logpy` defaults to flag/argument input. You can also choose a mode explicitly:
-
-```sh
-logpy --flags --substance LSD --dosage 100μg --roa sublingual
-logpy --flags --substance Ketamine --dosage 25mg --roa intramuscular --volume-ml 1.5
-logpy --mixture --substance "Ketamine; Midazolam" --dosage "25mg; 1mg" --roa intramuscular --volume-ml 1.5
-logpy --prompt
-logpy --dmenu
-logpy --bemenu
-logpy --fuzzel
-```
-
-In `--dmenu`, `--bemenu`, and `--fuzzel` modes, selectors use rougher, case-insensitive matching where supported by the menu program. Substance, route, and salt selectors also accept common abbreviations and expand them before logging, e.g. `k` -> `Ketamine`, `im` -> `intramuscular`, and `hcl` -> `hydrochloride`.
-
-`--dmenu` and `--bemenu` selectors use a `0.75` width factor.
-
-Prompt and selector modes ask for route first, then volume, then any intravenous site, then one or more substances. Intravenous site entry asks for a vein and then left/right side.
-
-The substance selector includes substances already present in the current CSV log file. `Substance[1]` is required. Later substance prompts list `Done` first, and choosing `Done` ends the substance list. Menu users can type a new substance directly. Substance selector history is cached per CSV file in `~/.config/logpy/prompt-options.json`, so startup normally reloads the prompt options without scanning CSV logs; missing or stale prompt caches are rebuilt once from the CSV. Substance titles and abbreviations are cached in `~/.config/logpy/substances.json`; local cache entries are loaded before input collection, while uncached prior CSV history entries and newly logged substances are refreshed after prompts.
-
-Interactive dosages ask for an amount and then a unit, defaulting to `mg`. Menu dosage prompts list previously logged amounts for the selected substance, including units. If the amount already includes a unit, it is logged as entered.
-
-The salt selector starts with `freebase`, `hydrochloride`, and `sulfate`, followed by the remaining known salt forms.
-
-For intravenous routes, prompt and selector modes ask for a vein and then a side, logging the combined site such as `left-median-cubital` or `right-median-cubital`.
-
-Prompt and selector modes always ask for volume and append it to the dosage, e.g. `25mg@1ml`. Selector modes offer `0.1ml` through `5ml` in `0.1ml` increments, while still allowing custom values.
-
-The `Extra options?` prompt controls whether note and time offset are collected. Selector mode time offsets are offered in 15 minute increments up to 24 hours, while still allowing custom values. Stdin prompt mode asks for free text after extra options are enabled.
-
-Use `--mixture` or `--kind mixture` to log several compounds combined in one syringe volume. In flags mode, separate substances, dosages, and optional salts with `;` or `+`; the row is logged with list-valued fields formatted as angle-bracketed comma lists, e.g. `<Ketamine,Midazolam>`, `<25mg,1mg>@1.5`. In prompt and selector modes, entering more than one compound logs the row as a mixture automatically.
-
-Basic log:
-```sh
-logpy LSD 100μg sublingual
-logpy LSD 100μg sublingual -sa tartrate
-logpy MDMA 120mg oral -sa hcl -n "taken with food"
-```
-
-With a backdated time:
-```sh
+# log through "argument" mode
+# usage: logpy <SUBSTANCE> <DOSAGE> <ROA> [TIME...] [OPTIONS] )
+logpy Methamphetamine ~50mg Intravenous --note "reused-syringe reused-needle omg-my-favorite"
+logpy Methamphetamine 50mg Intravenous --site left-cephalic --salt Hydrochloride
 logpy LSD 100μg sublingual 2 hours ago
 logpy LSD 100μg sublingual -sa tartrate yesterday at 10pm
 logpy MDMA 120mg oral -sa hcl 2025-12-04 10:00
+
+# log via "flags" mode:
+logpy --flags --substance LSD --dosage 100μg --roa sublingual
+logpy --flags --substance Ketamine --dosage 25mg --roa intramuscular --volume-ml 1.5
 ```
 
-If the ingestion time is more than 10 minutes in the past, it gets appended to the Discord message automatically.
+Use `--mixture` or `--kind mixture` to log several compounds combined in one syringe volume. In flags mode, separate substances, dosages, and optional salts with `;` or `+`; the row is logged with list-valued fields formatted as angle-bracketed comma lists, e.g. `<Ketamine,Midazolam>`, `<25mg,1mg>@1.5`. In prompt and selector modes, entering more than one compound logs the row as a mixture automatically.
+
+```sh
+logpy --mixture --substance "Ketamine; Midazolam" --dosage "25mg; 1mg" --roa intramuscular --volume-ml 1.5
+```
+
+# log through menu modes for fast navigation and a more forgiving and user-friendly interface
+# - "prompt" mode
+logpy --prompt
+# - "dmenu" mode
+logpy --dmenu
+# - "bemenu" mode
+logpy --bemenu
+# - "fuzzel" mode
+logpy --fuzzel
+```
+
 
 ## Options
 
