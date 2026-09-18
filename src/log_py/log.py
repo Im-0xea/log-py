@@ -19,8 +19,9 @@ err_con = Console(stderr=True)
 app = typer.Typer(add_completion=True, no_args_is_help=True)
 app_dir = Path(typer.get_app_dir("logpy"))
 SUBSTANCE_CACHE_FILE = app_dir / "substances.json"
-CUSTOM_SUBSTANCE_CHOICE = "Custom..."
-MIXTURE_DONE_CHOICE = "Done"
+PROMPT_OPTIONS_CACHE_FILE = app_dir / "prompt-options.json"
+PROMPT_OPTIONS_CACHE_VERSION = 1
+DONE_SUBSTANCE_CHOICE = "Done"
 SUBSTANCE_ALIASES = {
     "2c-b": ["2cb", "2-cb"],
     "Amphetamine": ["amph", "speed"],
@@ -79,12 +80,28 @@ SALT_CHOICES = [
         if salt not in {"freebase", "hydrochloride", "sulfate"}
     ],
 ]
-VOLUME_CHOICES = ["0.25ml", "0.5ml", "1ml", "1.5ml", "2ml", "2.5ml", "5ml", "10ml"]
-TIME_CHOICES = ["15 minutes ago", "30 minutes ago", "45 minutes ago", "1 hour ago"]
+VOLUME_CHOICES = [
+    f"{value / 10:g}ml"
+    for value in range(1, 51)
+]
+UNIT_CHOICES = ["mg", "ug", "mcg", "g", "ml"]
 EXTRA_INFO_ALIASES = {
     "No": ["n"],
     "Yes": ["y"],
 }
+
+
+def _time_offset_label(minutes: int) -> str:
+    if minutes < 60 or minutes % 60:
+        return f"{minutes} minutes ago"
+    hours = minutes // 60
+    return f"{hours} hour{'s' if hours != 1 else ''} ago"
+
+
+TIME_CHOICES = [
+    _time_offset_label(minutes)
+    for minutes in range(15, 24 * 60 + 1, 15)
+]
 IV_SITE_BASES = [
     "median-cubital",
     "cephalic",
@@ -255,11 +272,95 @@ def _cache_substance_entry(entry: dict[str, object] | None) -> None:
     _merge_cached_substance_aliases({title: cache[title]})
 
 
+def _logfile_cache_key(logfile: Path) -> str:
+    return str(logfile.expanduser().resolve(strict=False))
+
+
+def _logfile_fingerprint(logfile: Path) -> dict[str, int] | None:
+    try:
+        stat = logfile.stat()
+    except OSError:
+        return None
+    return {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+
+
+def _load_prompt_options_cache() -> dict[str, object]:
+    if not PROMPT_OPTIONS_CACHE_FILE.exists():
+        return {}
+    try:
+        with open(PROMPT_OPTIONS_CACHE_FILE) as infile:
+            raw_cache = json.load(infile)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw_cache, dict):
+        return {}
+    logs = raw_cache.get("logs")
+    return logs if isinstance(logs, dict) else {}
+
+
+def _write_prompt_options_cache(cache: dict[str, object]) -> None:
+    PROMPT_OPTIONS_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": PROMPT_OPTIONS_CACHE_VERSION,
+        "logs": dict(sorted(cache.items())),
+    }
+    tmpfile = PROMPT_OPTIONS_CACHE_FILE.with_suffix(f"{PROMPT_OPTIONS_CACHE_FILE.suffix}.tmp")
+    with open(tmpfile, "w") as outfile:
+        json.dump(payload, outfile, indent=2, sort_keys=True)
+        outfile.write("\n")
+    tmpfile.replace(PROMPT_OPTIONS_CACHE_FILE)
+
+
+def _valid_prompt_option_substances(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    substances = []
+    seen = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        substance = item.strip()
+        if not substance or substance in seen:
+            continue
+        seen.add(substance)
+        substances.append(substance)
+    return substances
+
+
+def _load_cached_logged_substances(logfile: Path) -> list[str] | None:
+    entry = _load_prompt_options_cache().get(_logfile_cache_key(logfile))
+    if not isinstance(entry, dict):
+        return [] if not logfile.exists() else None
+    if entry.get("fingerprint") != _logfile_fingerprint(logfile):
+        return [] if not logfile.exists() else None
+    return _valid_prompt_option_substances(entry.get("substances"))
+
+
+def _store_logged_substances(logfile: Path, substances: list[str]) -> None:
+    cache = _load_prompt_options_cache()
+    cache[_logfile_cache_key(logfile)] = {
+        "fingerprint": _logfile_fingerprint(logfile),
+        "substances": substances,
+    }
+    _write_prompt_options_cache(cache)
+
+
+def _add_logged_substance_option(logfile: Path, substance: str) -> None:
+    entry = _load_prompt_options_cache().get(_logfile_cache_key(logfile))
+    substances = (
+        _valid_prompt_option_substances(entry.get("substances"))
+        if isinstance(entry, dict)
+        else []
+    )
+    updated = [substance, *[item for item in substances if item != substance]]
+    _store_logged_substances(logfile, updated)
+
+
 def _sync_substance_cache_from_history(logfile: Path) -> None:
     cache = _load_substance_cache()
     changed = False
     for substance in _read_logged_substances(logfile):
-        if substance in cache or " + " in substance:
+        if substance in cache or _is_list_value(substance):
             continue
         entry = _fetch_substance_entry(substance)
         if not entry:
@@ -316,6 +417,14 @@ def _resolve_alias(value: str | None, aliases: dict[str, list[str]]) -> str | No
     if not stripped:
         return stripped
     return _alias_lookup(aliases).get(_alias_key(stripped), stripped)
+
+
+def _is_list_value(value: str) -> bool:
+    stripped = value.strip()
+    return (
+        " + " in stripped
+        or (stripped.startswith("<") and stripped.endswith(">") and "," in stripped)
+    )
 
 
 def _choice_label(canonical: str, aliases: dict[str, list[str]]) -> str:
@@ -484,28 +593,76 @@ def _append_solution_volume(dosage: str, volume_ml: str | None) -> str:
     return f"{dosage}@{volume_ml}"
 
 
-def _prompt_for_dosage(label: str, current: str | None = None) -> str:
-    dosage = _prompt_for_value(label, current)
-    if dosage is None:
-        raise typer.BadParameter(f"{label} is required")
-    return dosage.strip()
+def _split_dosage_unit(current: str | None) -> tuple[str | None, str | None]:
+    if not current:
+        return None, None
+    stripped = current.strip()
+    for unit in sorted(UNIT_CHOICES, key=len, reverse=True):
+        if stripped.casefold().endswith(unit.casefold()):
+            amount = stripped[:-len(unit)].strip()
+            return amount or stripped, unit
+    return stripped, None
 
 
-def _menu_for_dosage(executable: str, label: str, current: str | None = None) -> str:
-    dosage = _menu_for_value(executable, label, current)
-    if dosage is None:
-        raise typer.BadParameter(f"{label} is required")
-    return dosage.strip()
+def _format_dosage(amount: str, unit: str | None) -> str:
+    amount = amount.strip()
+    if any(char.isalpha() for char in amount):
+        return amount
+    return f"{amount}{unit or 'mg'}"
+
+
+def _prompt_for_dosage(label: str, current: str | None = None, optional: bool = False) -> str:
+    current_amount, current_unit = _split_dosage_unit(current)
+    amount = _prompt_for_value(label, current_amount, optional=optional)
+    if amount is None:
+        return ""
+    unit = _prompt_for_value("Unit", current_unit or "mg", optional=False)
+    return _format_dosage(amount, unit)
+
+
+def _menu_for_dosage(
+    executable: str,
+    label: str,
+    current: str | None = None,
+    optional: bool = False,
+    candidates: list[str] | None = None,
+) -> str:
+    current_amount, current_unit = _split_dosage_unit(current)
+    dosage_candidates = []
+    if current:
+        dosage_candidates.append(current)
+    dosage_candidates.extend(candidates or [])
+    amount = _menu_for_value(
+        executable,
+        label,
+        current_amount,
+        candidates=dosage_candidates,
+        optional=optional,
+    )
+    if amount is None:
+        return ""
+    selected_amount, selected_unit = _split_dosage_unit(amount)
+    if selected_unit:
+        return _format_dosage(selected_amount or amount, selected_unit)
+    unit_candidates = [current_unit] if current_unit else []
+    unit_candidates.extend(UNIT_CHOICES)
+    unit = _menu_for_value(
+        executable,
+        "Unit",
+        current_unit or "mg",
+        candidates=unit_candidates,
+    )
+    return _format_dosage(amount, unit)
 
 
 def _prompt_for_extra_info(note: str | None, time: str | None) -> tuple[str | None, str | None]:
     if note or time:
         return note, time
-    if not typer.confirm("Add extra info?", default=False):
+    if not typer.confirm("Extra options?", default=False):
         return None, None
     return (
         _prompt_for_value("Note", note, optional=True),
-        _prompt_for_value("Time", time, optional=True),
+        _prompt_for_value("Time offset", time, optional=True),
     )
 
 
@@ -514,7 +671,7 @@ def _menu_for_extra_info(executable: str, note: str | None, time: str | None) ->
         return note, time
     add_extra_info = _menu_for_value(
         executable,
-        "Add extra info?",
+        "Extra options?",
         "No",
         candidates=["No", "Yes"],
         aliases=EXTRA_INFO_ALIASES,
@@ -525,7 +682,7 @@ def _menu_for_extra_info(executable: str, note: str | None, time: str | None) ->
         _menu_for_value(executable, "Note", note, optional=True),
         _menu_for_value(
             executable,
-            "Time",
+            "Time offset",
             time,
             candidates=([time] if time else []) + TIME_CHOICES,
             optional=True,
@@ -540,15 +697,29 @@ def _is_intravenous_route(roa: str) -> bool:
 def _split_mixture_values(value: str | None) -> list[str]:
     if not value:
         return []
+    value = value.strip()
+    if value.startswith("<") and ">" in value:
+        list_value = value[1:value.index(">")]
+        return [part.strip() for part in list_value.split(",") if part.strip()]
     delimiter = ";" if ";" in value else "+"
     return [part.strip() for part in value.split(delimiter) if part.strip()]
 
 
-def _join_mixture_values(values: list[str | None]) -> str | None:
+def _dosage_without_volume(dosage: str) -> str:
+    dosage = dosage.strip()
+    if dosage.startswith("<") and ">" in dosage:
+        return dosage[:dosage.index(">") + 1]
+    if "@" not in dosage:
+        return dosage
+    before, after = [part.strip() for part in dosage.split("@", 1)]
+    return after if before.endswith("ml") and after else before
+
+
+def _format_list_value(values: list[str | None]) -> str | None:
     present = [value for value in values if value]
     if not present:
         return None
-    return " + ".join(present)
+    return f"<{','.join(present)}>"
 
 
 def _format_mixture(
@@ -557,13 +728,23 @@ def _format_mixture(
     salts: list[str | None],
     volume_ml: str | None,
 ) -> tuple[str, str, str | None]:
-    if len(substances) < 2:
-        raise typer.BadParameter("Mixtures require at least two substances")
-    if len(substances) != len(dosages):
+    sub_len = 0
+    for sub in substances:
+        if not sub is None:
+            sub_len += 1
+    dos_len = 0
+    for dos in dosages:
+        if not dos is None:
+            dos_len += 1
+    sal_len = 0
+    for sal in salts:
+        if not sal is None:
+            sal_len += 1
+    if sub_len != dos_len:
         raise typer.BadParameter("Mixture substance and dosage counts must match")
-    if len(salts) > len(substances):
+    if sal_len > sub_len:
         raise typer.BadParameter("Mixture salt count cannot exceed substance count")
-    if len(salts) < len(substances):
+    if sal_len < sub_len:
         salts = [*salts, *([None] * (len(substances) - len(salts)))]
 
     volume_ml = _format_solution_volume(volume_ml)
@@ -580,9 +761,9 @@ def _format_mixture(
     ]
     resolved_dosages = [dosage.strip() for dosage in dosages]
     return (
-        " + ".join(resolved_substances),
-        f"{' + '.join(resolved_dosages)}@{volume_ml}",
-        _join_mixture_values(resolved_salts),
+        _format_list_value(resolved_substances),
+        f"{_format_list_value(resolved_dosages)}@{volume_ml}",
+        _format_list_value(resolved_salts),
     )
 
 
@@ -642,7 +823,22 @@ def _menu_for_site(executable: str, roa: str, current: str | None = None) -> str
     return _format_iv_site(vein, side)
 
 
-def _read_logged_substances(logfile: Path) -> list[str]:
+def _menu_for_route(executable: str, current: str | None = None) -> str:
+    roa_candidates = [current] if current else []
+    roa_candidates.extend(ROA_ALIASES)
+    roa = _menu_for_value(
+        executable,
+        "Route",
+        current,
+        candidates=roa_candidates,
+        aliases=ROA_ALIASES,
+    )
+    if not roa:
+        raise typer.BadParameter("Route of administration is required")
+    return roa
+
+
+def _scan_logged_substances(logfile: Path) -> list[str]:
     if not logfile.exists():
         return []
 
@@ -650,7 +846,9 @@ def _read_logged_substances(logfile: Path) -> list[str]:
     with open(logfile, newline="") as infile:
         for row in csv.reader(infile):
             if len(row) > 2 and row[2].strip().lower() not in ("substance", "med"):
-                substances.append(row[2].strip())
+                substance = row[2].strip()
+                if not _is_list_value(substance):
+                    substances.append(substance)
 
     seen = set()
     unique = []
@@ -662,40 +860,50 @@ def _read_logged_substances(logfile: Path) -> list[str]:
     return unique
 
 
-def _menu_for_substance(
-    executable: str,
-    logfile: Path,
-    current: str | None = None,
-) -> str:
-    candidates = []
+def _read_logged_dosages_for_substance(logfile: Path, substance: str) -> list[str]:
+    if not logfile.exists():
+        return []
+
+    target_key = _alias_key(_resolve_alias(substance, SUBSTANCE_ALIASES) or substance)
+    dosages = []
+    with open(logfile, newline="") as infile:
+        for row in csv.reader(infile):
+            if len(row) <= 3 or row[2].strip().lower() in ("substance", "med"):
+                continue
+            row_substances = [
+                _resolve_alias(item, SUBSTANCE_ALIASES) or item
+                for item in _split_mixture_values(row[2])
+            ]
+            row_dosages = _split_mixture_values(_dosage_without_volume(row[3]))
+            for row_substance, row_dosage in zip(row_substances, row_dosages):
+                if _alias_key(row_substance) == target_key:
+                    dosages.append(row_dosage)
+
     seen = set()
-    for candidate in [current, *_read_logged_substances(logfile), *SUBSTANCE_ALIASES]:
-        if not candidate:
-            continue
-        key = _alias_key(_resolve_alias(candidate, SUBSTANCE_ALIASES) or candidate)
+    unique = []
+    for dosage in reversed(dosages):
+        key = _alias_key(dosage)
         if key in seen:
             continue
         seen.add(key)
-        candidates.append(candidate)
-    candidates.append(CUSTOM_SUBSTANCE_CHOICE)
+        unique.append(dosage)
+    return unique
 
-    selected = _menu_for_value(
-        executable,
-        "Substance",
-        candidates=candidates,
-        aliases=SUBSTANCE_ALIASES,
-    )
-    if selected == CUSTOM_SUBSTANCE_CHOICE:
-        selected = _menu_for_value(executable, "Custom substance", aliases=SUBSTANCE_ALIASES)
-    if selected is None:
-        raise typer.BadParameter("Substance is required")
-    return selected
+
+def _read_logged_substances(logfile: Path) -> list[str]:
+    cached_substances = _load_cached_logged_substances(logfile)
+    if cached_substances is not None:
+        return cached_substances
+
+    substances = _scan_logged_substances(logfile)
+    _store_logged_substances(logfile, substances)
+    return substances
 
 
 def _menu_substance_candidates(logfile: Path, current: str | None = None) -> list[str]:
     candidates = []
     seen = set()
-    for candidate in [current, *_read_logged_substances(logfile), *SUBSTANCE_ALIASES]:
+    for candidate in [current, *_read_logged_substances(logfile)]:
         if not candidate:
             continue
         key = _alias_key(_resolve_alias(candidate, SUBSTANCE_ALIASES) or candidate)
@@ -718,12 +926,11 @@ def _collect_mixture_flags(
     return _format_mixture(substances, dosages, salts, volume_ml)
 
 
-def _collect_mixture_prompt(
+def _collect_substances_prompt(
     substance: str | None,
     dosage: str | None,
     salt: str | None,
-    volume_ml: str | None,
-) -> tuple[str, str, str | None]:
+) -> tuple[list[str], list[str], list[str | None]]:
     substances = []
     dosages = []
     salts = []
@@ -737,32 +944,39 @@ def _collect_mixture_prompt(
         current_substance = seeded_substances[index - 1] if index <= len(seeded_substances) else None
         current_dosage = seeded_dosages[index - 1] if index <= len(seeded_dosages) else None
         current_salt = seeded_salts[index - 1] if index <= len(seeded_salts) else None
-        substance_label = f"Mixture substance {index}"
-        if index > 2:
-            substance_label += " (blank to finish)"
+
+        substance_label = f"Substance[{index}]"
+        default_substance = current_substance
+        if index > 1 and not default_substance:
+            default_substance = DONE_SUBSTANCE_CHOICE
         component_substance = _prompt_for_value(
             substance_label,
-            current_substance,
-            optional=index > 2,
+            default_substance,
+            optional=False,
         )
-        if component_substance is None:
+
+        if _alias_key(component_substance) == _alias_key(DONE_SUBSTANCE_CHOICE):
             break
-        substances.append(component_substance)
-        dosages.append(_prompt_for_dosage(f"Mixture dosage {index}", current_dosage))
-        salts.append(_prompt_for_value(f"Mixture salt {index}", current_salt, optional=True))
 
-    volume_ml = _prompt_for_value("Syringe volume", volume_ml, optional=False)
-    return _format_mixture(substances, dosages, salts, volume_ml)
+        substances.append(_resolve_alias(component_substance, SUBSTANCE_ALIASES) or component_substance)
+        dosages.append(_prompt_for_dosage("Dosage", current_dosage))
+        salts.append(
+            _resolve_alias(
+                _prompt_for_value("Salt", current_salt, optional=True),
+                SALT_ALIASES,
+            )
+        )
+
+    return substances, dosages, salts
 
 
-def _collect_mixture_menu(
+def _collect_substances_menu(
     executable: str,
     logfile: Path,
     substance: str | None,
     dosage: str | None,
     salt: str | None,
-    volume_ml: str | None,
-) -> tuple[str, str, str | None]:
+) -> tuple[list[str], list[str], list[str | None]]:
     substances = []
     dosages = []
     salts = []
@@ -777,34 +991,36 @@ def _collect_mixture_menu(
         current_dosage = seeded_dosages[index - 1] if index <= len(seeded_dosages) else None
         current_salt = seeded_salts[index - 1] if index <= len(seeded_salts) else None
         candidates = _menu_substance_candidates(logfile, current_substance)
-        if index > 2:
-            candidates.append(MIXTURE_DONE_CHOICE)
-        candidates.append(CUSTOM_SUBSTANCE_CHOICE)
+        if index > 1:
+            candidates = [DONE_SUBSTANCE_CHOICE, *candidates]
+
         component_substance = _menu_for_value(
             executable,
-            f"Mixture substance {index}",
+            f"Substance[{index}]",
+            DONE_SUBSTANCE_CHOICE if index > 1 else current_substance,
             candidates=candidates,
             aliases=SUBSTANCE_ALIASES,
+            optional=index > 1,
         )
-        if component_substance == MIXTURE_DONE_CHOICE:
+        if component_substance is None or _alias_key(component_substance) == _alias_key(DONE_SUBSTANCE_CHOICE):
             break
-        if component_substance == CUSTOM_SUBSTANCE_CHOICE:
-            component_substance = _menu_for_value(
-                executable,
-                f"Custom mixture substance {index}",
-                aliases=SUBSTANCE_ALIASES,
-            )
-        if component_substance is None:
-            raise typer.BadParameter(f"Mixture substance {index} is required")
+
         substances.append(component_substance)
-        dosages.append(_menu_for_dosage(executable, f"Mixture dosage {index}", current_dosage))
+        dosages.append(
+            _menu_for_dosage(
+                executable,
+                "Dosage",
+                current_dosage,
+                candidates=_read_logged_dosages_for_substance(logfile, component_substance),
+            )
+        )
 
         salt_candidates = [current_salt] if current_salt else []
         salt_candidates.extend(SALT_CHOICES)
         salts.append(
             _menu_for_value(
                 executable,
-                f"Mixture salt {index}",
+                "Salt",
                 current_salt,
                 candidates=salt_candidates,
                 optional=True,
@@ -812,13 +1028,40 @@ def _collect_mixture_menu(
             )
         )
 
-    volume_ml = _menu_for_value(
-        executable,
-        "Syringe volume",
-        volume_ml,
-        candidates=([volume_ml] if volume_ml else []) + VOLUME_CHOICES,
+    return substances, dosages, salts
+
+
+def _format_single_solution_component(
+    substance: str,
+    dosage: str,
+    salt: str | None,
+    volume_ml: str | None,
+) -> tuple[str, str, str | None]:
+    return (
+        _resolve_alias(substance, SUBSTANCE_ALIASES) or substance,
+        _append_solution_volume(dosage.strip(), volume_ml),
+        _resolve_alias(salt, SALT_ALIASES) if salt else None,
     )
-    return _format_mixture(substances, dosages, salts, volume_ml)
+
+
+def _format_collected_substances(
+    kind: LogKind,
+    substances: list[str],
+    dosages: list[str],
+    salts: list[str | None],
+    volume_ml: str | None,
+) -> tuple[LogKind, str, str, str | None]:
+    if len(substances) > 1:
+        substance, dosage, salt = _format_mixture(substances, dosages, salts, volume_ml)
+        return LogKind.mixture, substance, dosage, salt
+
+    substance, dosage, salt = _format_single_solution_component(
+        substances[0],
+        dosages[0],
+        salts[0] if salts else None,
+        volume_ml,
+    )
+    return kind, substance, dosage, salt
 
 
 def _collect_input(
@@ -863,20 +1106,20 @@ def _collect_input(
         return kind, substance, dosage, roa, site, salt, note, time
 
     if mode == InputMode.prompt:
-        if kind == LogKind.mixture:
-            substance, dosage, salt = _collect_mixture_prompt(substance, dosage, salt, volume_ml)
-        else:
-            substance = _resolve_alias(_prompt_for_value("Substance", substance), SUBSTANCE_ALIASES)
-            dosage = _prompt_for_dosage("Dosage", dosage)
-        roa = _resolve_alias(_prompt_for_value("Route of administration", roa), ROA_ALIASES)
-        if kind != LogKind.mixture and _route_supports_solution_volume(roa):
-            volume_ml = _prompt_for_value("Solution volume", volume_ml, optional=True)
-        if kind != LogKind.mixture:
-            dosage = _append_solution_volume(dosage, volume_ml)
+        roa = _resolve_alias(_prompt_for_value("Route", roa), ROA_ALIASES)
+        volume_ml = _prompt_for_value("Volume", volume_ml, optional=False)
         site = _prompt_for_site(roa, site)
-        salt = salt if kind == LogKind.mixture else _resolve_alias(
-            _prompt_for_value("Salt", salt, optional=True),
-            SALT_ALIASES,
+        substances, dosages, salts = _collect_substances_prompt(
+            substance,
+            dosage,
+            salt,
+        )
+        kind, substance, dosage, salt = _format_collected_substances(
+            kind,
+            substances,
+            dosages,
+            salts,
+            volume_ml,
         )
         note, time = _prompt_for_extra_info(note, time)
         return (
@@ -891,40 +1134,27 @@ def _collect_input(
         )
 
     menu = mode.value
-    if kind == LogKind.mixture:
-        substance, dosage, salt = _collect_mixture_menu(menu, logfile, substance, dosage, salt, volume_ml)
-    else:
-        substance = _menu_for_substance(menu, logfile, substance)
-        dosage = _menu_for_dosage(menu, "Dosage", dosage)
-    roa_candidates = [roa] if roa else []
-    roa_candidates.extend(ROA_ALIASES)
-    roa = _menu_for_value(
+    roa = _menu_for_route(menu, roa)
+    volume_ml = _menu_for_value(
         menu,
-        "Route of administration",
-        roa,
-        candidates=roa_candidates,
-        aliases=ROA_ALIASES,
+        "Volume",
+        volume_ml,
+        candidates=([volume_ml] if volume_ml else []) + VOLUME_CHOICES,
     )
-    if kind != LogKind.mixture and _route_supports_solution_volume(roa):
-        volume_ml = _menu_for_value(
-            menu,
-            "Solution volume",
-            volume_ml,
-            candidates=([volume_ml] if volume_ml else []) + VOLUME_CHOICES,
-            optional=True,
-        )
-    if kind != LogKind.mixture:
-        dosage = _append_solution_volume(dosage, volume_ml)
-    salt_candidates = [salt] if salt else []
-    salt_candidates.extend(SALT_CHOICES)
     site = _menu_for_site(menu, roa, site)
-    salt = salt if kind == LogKind.mixture else _menu_for_value(
+    substances, dosages, salts = _collect_substances_menu(
         menu,
-        "Salt",
+        logfile,
+        substance,
+        dosage,
         salt,
-        candidates=salt_candidates,
-        optional=True,
-        aliases=SALT_ALIASES,
+    )
+    kind, substance, dosage, salt = _format_collected_substances(
+        kind,
+        substances,
+        dosages,
+        salts,
+        volume_ml,
     )
     note, time = _menu_for_extra_info(menu, note, time)
     return (
@@ -1138,6 +1368,7 @@ def log_ingestion(
     with open(logfile, "a", newline="") as of:
         log = csv.writer(of)
         log.writerow([time_now, user, title, dosage, roa, site, salt, note])
+    _add_logged_substance_option(logfile, title)
 
     if not webhook:
         return

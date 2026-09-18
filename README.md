@@ -40,19 +40,21 @@ In `--dmenu`, `--bemenu`, and `--fuzzel` modes, selectors use rougher, case-inse
 
 `--dmenu` and `--bemenu` selectors use a `0.75` width factor.
 
-The substance selector includes substances already present in the current CSV log file, common built-in substances, cached AnodyneWiki substances, plus a `Custom...` option for entering a new value. Substance titles and abbreviations are cached in `~/.config/logpy/substances.json`; local cache entries are loaded before input collection, while uncached prior CSV history entries and newly logged substances are refreshed after prompts.
+Prompt and selector modes ask for route first, then volume, then any intravenous site, then one or more substances. Intravenous site entry asks for a vein and then left/right side.
 
-Dosages are logged exactly as entered after trimming whitespace. For example, `25` logs as `25`, and `25mg` logs as `25mg`.
+The substance selector includes substances already present in the current CSV log file. `Substance[1]` is required. Later substance prompts list `Done` first, and choosing `Done` ends the substance list. Menu users can type a new substance directly. Substance selector history is cached per CSV file in `~/.config/logpy/prompt-options.json`, so startup normally reloads the prompt options without scanning CSV logs; missing or stale prompt caches are rebuilt once from the CSV. Substance titles and abbreviations are cached in `~/.config/logpy/substances.json`; local cache entries are loaded before input collection, while uncached prior CSV history entries and newly logged substances are refreshed after prompts.
+
+Interactive dosages ask for an amount and then a unit, defaulting to `mg`. Menu dosage prompts list previously logged amounts for the selected substance, including units. If the amount already includes a unit, it is logged as entered.
 
 The salt selector starts with `freebase`, `hydrochloride`, and `sulfate`, followed by the remaining known salt forms.
 
 For intravenous routes, prompt and selector modes ask for a vein and then a side, logging the combined site such as `left-median-cubital` or `right-median-cubital`.
 
-For subcutaneous, intramuscular, intradermal, intrarectal, and intravenous routes, prompt and selector modes optionally ask for a solution volume and append it to the dosage, e.g. `25mg@1.5`. Selector modes offer `0.25ml`, `0.5ml`, `1ml`, `1.5ml`, `2ml`, `2.5ml`, `5ml`, and `10ml`, while still allowing custom values.
+Prompt and selector modes always ask for volume and append it to the dosage, e.g. `25mg@1ml`. Selector modes offer `0.1ml` through `5ml` in `0.1ml` increments, while still allowing custom values.
 
-Selector mode extra-info time prompts offer `15 minutes ago`, `30 minutes ago`, `45 minutes ago`, and `1 hour ago`, while still allowing custom values. Stdin prompt mode asks for free text.
+The `Extra options?` prompt controls whether note and time offset are collected. Selector mode time offsets are offered in 15 minute increments up to 24 hours, while still allowing custom values. Stdin prompt mode asks for free text after extra options are enabled.
 
-Use `--mixture` or `--kind mixture` to log several compounds combined in one syringe volume. In flags mode, separate substances, dosages, and optional salts with `;` or `+`; the row is logged as one combined substance and one combined dosage with the shared volume appended, e.g. `Ketamine + Midazolam`, `25mg + 1mg@1.5`.
+Use `--mixture` or `--kind mixture` to log several compounds combined in one syringe volume. In flags mode, separate substances, dosages, and optional salts with `;` or `+`; the row is logged with list-valued fields formatted as angle-bracketed comma lists, e.g. `<Ketamine,Midazolam>`, `<25mg,1mg>@1.5`. In prompt and selector modes, entering more than one compound logs the row as a mixture automatically.
 
 Basic log:
 ```sh
