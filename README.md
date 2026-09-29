@@ -42,13 +42,20 @@ Log through "flags" mode:
 
 ```sh
 logpy --flags --substance LSD --dosage 100μg --roa sublingual
-logpy --flags --substance Ketamine --dosage 25mg --roa intramuscular --volume-ml 1.5
+logpy --flags --substance Ketamine --dosage 25mg --roa intramuscular --volume 1.5ml
 ```
 
-Use `--mixture` or `--kind mixture` to log several compounds combined in one syringe volume. In flags mode, separate substances, dosages, and optional salts with `;` or `+`; the row is logged with list-valued fields formatted as angle-bracketed comma lists, e.g. `<Ketamine,Midazolam>`, `<25mg,1mg>@1.5`. In prompt and selector modes, entering more than one compound logs the row as a mixture automatically.
+Show total usage for a day from the CSV log:
 
 ```sh
-logpy --mixture --substance "Ketamine; Midazolam" --dosage "25mg; 1mg" --roa intramuscular --volume-ml 1.5
+logpy --daily-usage --csv log.csv
+logpy --daily-usage=23.9.2026 --csv log.csv
+```
+
+To log several compounds combined in one syringe volume, separate substances, dosages, and optional salts with `;` or `+`; the row is logged with substance names surrounded by `< >` and separated by `/`, and list-valued dosage/salt fields formatted as bracketed comma lists, e.g. `<Ketamine/Midazolam>`, `[25mg,1mg]@1.5ml`. In prompt and selector modes, entering more than one compound logs the row as a mixture automatically.
+
+```sh
+logpy --flags --substance "Ketamine; Midazolam" --dosage "25mg; 1mg" --roa intramuscular --volume 1.5ml
 ```
 
 Log through menu modes (fast navigation and a more user-friendly and forgiving interface):
@@ -76,13 +83,15 @@ logpy --fuzzel
 | `--dmenu` | | prompt for ingestion fields with dmenu selectors |
 | `--bemenu` | | prompt for ingestion fields with bemenu selectors |
 | `--fuzzel` | | prompt for ingestion fields with fuzzel selectors |
+| `--sync-choices` | | scan the CSV log and refresh menu choices, dosages, salts, and substance abbreviations |
+| `--daily-usage` | | sum usage for a day from the CSV log; optional value uses `d.m.y` format and defaults to today |
+| `--strict` | | only accept substances found in AnodyneWiki's API |
 | `--substance` | | substance to log |
 | `--dosage` | | dosage and unit |
 | `--roa` | | route of administration |
-| `--kind` | | entry kind: `single`, `composite`, `solution`, or `mixture` |
-| `--mixture` | | shortcut for `--kind mixture` |
-| `--time` | | ingestion time |
-| `--volume-ml` | | solution volume appended to dosage for injection/rectal routes |
+| `--offset-time` | | relative ingestion time, e.g. `2 hours ago` |
+| `--set-time` | | ingestion timestamp |
+| `--volume` | | solution volume appended to dosage for injection/rectal routes |
 | `--salt` | `-sa` | salt form |
 | `--site` | `-si` | site of administration |
 | `--note` | `-n` | note, added to the Discord message and CSV |
