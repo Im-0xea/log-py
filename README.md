@@ -70,6 +70,8 @@ logpy --plot plot.png --csv log.csv
 logpy --plot plot.png --plot-start "2024-01-01 00:00" --plot-stop "2024-01-02 00:00" --plot-font Monospace,8 --csv log.csv
 ```
 
+An ingestion logged after the fact, with `--set-time`, `--offset-time` or a past choice in the "Minutes ago" prompt, gets a `backlogged:<elapsed>` token appended to its note, such as `backlogged:30min`, `backlogged:2h30min` or `backlogged:1d2h`, recording how long after the ingestion it was logged. Times less than a minute in the past and the time a menu session itself takes are not counted.
+
 Dosage prompts accept simple arithmetic expressions for numeric amounts, e.g. entering `90 / 2` and unit `mg` logs `45mg`. Expressions also work in argument mode (a lone `100/3mg` or `50+10mg` is arithmetic, not a mixture) and may be prefixed with `~` to mark an approximate dosage, e.g. `~25*2mg` logs and posts `~50mg`. Dosage amounts are rounded to two decimals before being logged and posted, so `100/3mg` becomes `33.33mg`.
 
 Track virtual syringe and needle supply counts:
@@ -171,8 +173,8 @@ The "Plot" action of the main menu draws the estimated blood plasma concentratio
 | `--substance` | | substance to log |
 | `--dosage` | | dosage and unit |
 | `--roa` | | route of administration |
-| `--offset-time` | | relative ingestion time, e.g. `2 hours ago` |
-| `--set-time` | | ingestion timestamp |
+| `--offset-time` | | relative ingestion time, e.g. `2 hours ago`; a past time adds `backlogged:<elapsed>` to the note |
+| `--set-time` | | ingestion timestamp; a past time adds `backlogged:<elapsed>` to the note |
 | `--volume` | | injected/used solution volume appended to dosage for injection/rectal routes |
 | `--syringe-size` | | maximum syringe capacity appended to the note for injection routes |
 | `--needle-gauge` | | needle gauge appended to the note for injection routes |

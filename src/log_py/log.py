@@ -1100,6 +1100,10 @@ NOTE_NEEDLE_KEY_RE = re.compile(r"(?:^|\s)needle:(?P<key>[^\s]+)")
 NOTE_REUSED_SYRINGE_RE = re.compile(r"(?:^|\s)reused-syringe(?:\s|$)")
 NOTE_REUSED_NEEDLE_RE = re.compile(r"(?:^|\s)reused-needle(?:\s|$)")
 NOTE_NON_DISPOSABLE_SYRINGE_RE = re.compile(r"(?:^|\s)non-disposable-syringe(?:\s|$)")
+NOTE_BACKLOGGED_RE = re.compile(r"(?:^|\s)backlogged:(?P<elapsed>[^\s]+)")
+# Ingestions given an explicit time at least this far in the past get a
+# "backlogged:<elapsed>" note token.
+BACKLOG_MIN_DELAY = timedelta(minutes=1)
 LENGTH_UNIT_ALIASES = {
     '"': "in",
     "in": "in",
@@ -1194,6 +1198,22 @@ def _append_note_supply_key(note: str | None, label: str, key: str | None, patte
     if pattern.search(note):
         return note
     return f"{note} {token}"
+
+
+def _append_note_backlog(note: str | None, ingestion_time: datetime, explicit_time: bool) -> str | None:
+    """Add "backlogged:<elapsed>" to the note of an ingestion logged after the fact.
+
+    Only ingestions whose time was given explicitly (--set-time, --offset-time
+    or the "Minutes ago" prompt) count; the few minutes a menu session takes
+    before the row is written do not.
+    """
+    if not explicit_time:
+        return note
+    delay = datetime.now(timezone.utc) - ingestion_time
+    if delay < BACKLOG_MIN_DELAY:
+        return note
+    token = f"backlogged:{_format_elapsed(delay).replace(' ', '')}"
+    return _append_note_token(note, token, NOTE_BACKLOGGED_RE)
 
 
 def _append_note_token(note: str | None, token: str, pattern: re.Pattern) -> str | None:
@@ -6054,6 +6074,7 @@ def log_ingestion(
         )
         time_now = ingestion_time.isoformat(timespec='milliseconds')
         is_backdated = datetime.now(timezone.utc) - ingestion_time > timedelta(minutes=10)
+        note = _append_note_backlog(note, ingestion_time, explicit_time=bool(time or offset_time))
         title = substance_md = substance
 
         _ensure_logfile(logfile)
