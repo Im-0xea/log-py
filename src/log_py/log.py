@@ -86,6 +86,9 @@ USERPAGE_CACHE_FILE = app_dir / "userpage.json"
 # ones are downloaded from AnodyneWiki by --sync-choices.
 STRUCTURE_ICON_DIR = app_dir / "structure"
 STRUCTURE_URL_TEMPLATE = "https://anodyne.wiki/structure/{key}.svg"
+# Show the drawings on the Substance prompt in fuzzel mode. Off for now; the
+# drawings are still downloaded by --sync-choices.
+STRUCTURE_ICONS_ENABLED = False
 # Consecutive failed structure downloads after which the sync stops trying.
 STRUCTURE_DOWNLOAD_MAX_FAILURES = 3
 DEFAULT_LOGFILE = app_dir / "logs.csv"
@@ -5307,7 +5310,7 @@ def _collect_substances_menu(
                     aliases=SUBSTANCE_ALIASES,
                     optional=index > 1,
                     allow_back=allow_back,
-                    icons_by_value=_substance_icons(candidates),
+                    icons_by_value=_substance_icons(candidates) if STRUCTURE_ICONS_ENABLED else None,
                 )
             except BackRequested:
                 if index == 1:
