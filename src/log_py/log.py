@@ -366,43 +366,6 @@ IV_SITE_WIKIPEDIA_ARTICLES = {
 }
 DAILY_USAGE_TODAY = "today"
 
-# Icons for the Route prompt and, for intravenous routes, the Vein and Side
-# prompts (freedesktop icon names from fuzzel's theme, see MENU_ICONS).
-ROUTE_ICONS = {
-    "oral": "face-smile-symbolic",
-    "sublingual": "face-raspberry-symbolic",
-    "buccal": "face-kiss-symbolic",
-    "intranasal": "face-sick-symbolic",
-    "inhaled": "weather-fog-symbolic",
-    "intravenous": "color-select-symbolic",
-    "intramuscular": "emoji-body-symbolic",
-    "subcutaneous": "mark-location-symbolic",
-    "intradermal": "input-tablet-symbolic",
-    "intrarectal": "go-bottom-symbolic",
-    "transdermal": "input-touchpad-symbolic",
-}
-IV_SITE_ICONS = {
-    "jugular": "avatar-default-symbolic",
-    "median-cubital": "emoji-body-symbolic",
-    "basilic": "emoji-body-symbolic",
-    "cephalic": "emoji-body-symbolic",
-    "dorsal-metacarpal": "input-touchpad-symbolic",
-    "dorsal-venous-network": "input-touchpad-symbolic",
-    "dorsal-venous-network-thumb": "input-touchpad-symbolic",
-    "femoral": "go-down-symbolic",
-    "great-saphenous": "go-down-symbolic",
-    "small-saphenous": "go-down-symbolic",
-    "venous-arch": "go-bottom-symbolic",
-    "venous-arch-index": "go-bottom-symbolic",
-    "venous-arch-middle": "go-bottom-symbolic",
-    "venous-arch-ring": "go-bottom-symbolic",
-    "venous-arch-little": "go-bottom-symbolic",
-    "left": "go-previous-symbolic",
-    "right": "go-next-symbolic",
-}
-# Route values are shown capitalized, so register both spellings.
-MENU_ICONS.update({name: icon for route, icon in ROUTE_ICONS.items() for name in (route, route.capitalize())})
-MENU_ICONS.update(IV_SITE_ICONS)
 
 
 class IngestionCancelled(Exception):

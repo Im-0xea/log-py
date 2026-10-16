@@ -129,7 +129,7 @@ logpy --menu-tool "rofi -dmenu"
 logpy --menu-tool "fuzzel --dmenu --prompt={prompt}"
 ```
 
-In fuzzel mode the choices carry icons from fuzzel's configured icon theme (`--icon-theme` on its command line, else `icon-theme` in `fuzzel.ini`, else hicolor). Because symbolic theme icons have a fixed dark fill, logpy copies each icon to `~/.config/logpy/icons/` with the fill replaced by `--menu-icon-color`, white by default, and hands fuzzel that copy. Pass an empty colour to use the theme icons as they are. Besides the action and navigation choices, the routes of administration and, for intravenous routes, the veins and sides of the Site prompt carry icons (`ROUTE_ICONS` and `IV_SITE_ICONS` in `log.py`).
+In fuzzel mode the choices carry icons from fuzzel's configured icon theme (`--icon-theme` on its command line, else `icon-theme` in `fuzzel.ini`, else hicolor). Because symbolic theme icons have a fixed dark fill, logpy copies each icon to `~/.config/logpy/icons/` with the fill replaced by `--menu-icon-color`, white by default, and hands fuzzel that copy. Pass an empty colour to use the theme icons as they are.
 
 `--sync-choices` also downloads the chemical structure drawing of every substance in the history from `https://anodyne.wiki/structure/<name>.svg` into `~/.config/logpy/structure/`, where `<name>` is the lowercase title with spaces replaced by underscores (such as `caffeine.svg` or `alpha_methyl_tryptamine.svg`). Substances the wiki has no drawing for are skipped and the run gives up after three failed requests in a row. The drawings are meant as substance icons for the fuzzel Substance prompt; that display is switched off for now (`STRUCTURE_ICONS_ENABLED` in `log.py`).
 
