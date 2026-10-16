@@ -303,6 +303,7 @@ STATISTICS_TIMESCALE_YEARLY = "Yearly"
 STATISTICS_TIMESCALE_TOTAL = "Total"
 STATISTICS_SECTION_SUBSTANCES = "Substances"
 STATISTICS_SECTION_ROUTES = "Routes of Administration"
+STATISTICS_SECTION_SITES = "Sites"
 SUPPLY_ACTION_ALIASES = {
     SUPPLY_ACTION_ADD: ["add", "a"],
     SUPPLY_ACTION_REMOVE: ["remove", "r"],
@@ -3306,6 +3307,7 @@ def _empty_stats_period() -> dict[str, object]:
         "ingestions": 0,
         "substances": {},
         "routes": {},
+        "sites": {},
     }
 
 
@@ -3353,6 +3355,11 @@ def _collect_statistics(logfile: Path, timescale: str) -> dict[str, dict[str, ob
             period_key = _stats_period_key(row_date, timescale)
             period = periods.setdefault(period_key, _empty_stats_period())
             period["ingestions"] = int(period["ingestions"]) + 1
+
+            site = row[5].strip() if len(row) > 5 else ""
+            sites = period["sites"]
+            if site and isinstance(sites, dict):
+                sites[site] = int(sites.get(site, 0)) + 1
 
             route = _format_route_for_log(row[4]) or row[4].strip().casefold()
             routes = period["routes"]
@@ -3443,6 +3450,15 @@ def _statistics_route_lines(period: dict[str, object]) -> list[str]:
             ingestions, total = int(value), "unknown"
         rows.append((ingestions, route, f"{route} (total: {total}, ingestions: {ingestions})"))
     return [row[2] for row in sorted(rows, key=lambda row: (-row[0], row[1].casefold()))]
+
+
+def _statistics_site_lines(period: dict[str, object]) -> list[str]:
+    """Sites of administration by use count, most used first."""
+    sites = period.get("sites")
+    if not isinstance(sites, dict):
+        return []
+    rows = sorted(sites.items(), key=lambda item: (-int(item[1]), item[0].casefold()))
+    return [f"{site} (ingestions: {int(count)})" for site, count in rows]
 
 
 def _show_statistics_lines(mode: InputMode, title: str, lines: list[str]) -> None:
@@ -3758,7 +3774,7 @@ def _show_statistics(mode: InputMode, logfile: Path) -> None:
         section = _select_statistics_choice(
             mode,
             period_title,
-            [STATISTICS_SECTION_SUBSTANCES, STATISTICS_SECTION_ROUTES],
+            [STATISTICS_SECTION_SUBSTANCES, STATISTICS_SECTION_ROUTES, STATISTICS_SECTION_SITES],
         )
         if section == BACK_CHOICE:
             continue
@@ -3768,6 +3784,8 @@ def _show_statistics(mode: InputMode, logfile: Path) -> None:
             _show_statistics_lines(mode, section_title, _statistics_substance_lines(period))
         elif section == STATISTICS_SECTION_ROUTES:
             _show_statistics_lines(mode, section_title, _statistics_route_lines(period))
+        elif section == STATISTICS_SECTION_SITES:
+            _show_statistics_lines(mode, section_title, _statistics_site_lines(period))
 
 
 def _load_webhook_message_cache() -> dict[str, dict[str, dict[str, object]]]:
