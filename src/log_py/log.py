@@ -4318,14 +4318,11 @@ def _padded_log_row(row: list[str]) -> list[str]:
 
 
 def _history_entry_label(row: list[str]) -> str:
+    """One line per log: local time and date, dosage, substance, route and [salt]."""
     padded = _padded_log_row(row)
     timestamp = _parse_log_timestamp(padded[0])
-    when = timestamp.strftime("%Y-%m-%d %H:%M:%S") if timestamp else padded[0]
-    parts = [when, padded[3], padded[2]]
-    if padded[4]:
-        parts.append(f"via {padded[4]}")
-    if padded[5]:
-        parts.append(f"at {padded[5]}")
+    when = timestamp.astimezone().strftime("%H:%M %d.%m.%Y") if timestamp else padded[0]
+    parts = [when, padded[3], padded[2], padded[4]]
     if padded[6]:
         parts.append(f"[{padded[6]}]")
     return " ".join(part for part in parts if part)
