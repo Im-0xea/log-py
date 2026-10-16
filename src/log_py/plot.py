@@ -54,6 +54,10 @@ DEFAULT_BLOOD_VOLUME = 5.0
 DEFAULT_RESOLUTION = (720, 480)
 DEFAULT_MAIN_FONT = "monospace,8"
 DEFAULT_LEGEND_FONT = "monospace,7"
+# Doses this long before the window still feed the curves of substances dosed
+# inside it, so a plot does not start from zero while a dose is still active.
+# 72 h is past the 1 % mark of the slowest (non-IV) elimination modelled.
+DEFAULT_CARRY_OVER = timedelta(hours=72)
 
 # Pixels of a plot's width not covered by the data area; the model is sampled
 # once per remaining pixel column.
@@ -90,13 +94,16 @@ def plot_plasma_concentrations(
     background_color: str | None = None,
     main_font: str = DEFAULT_MAIN_FONT,
     legend_font: str = DEFAULT_LEGEND_FONT,
+    carry_over: timedelta | None = DEFAULT_CARRY_OVER,
 ) -> list[str]:
     """Render the estimated plasma concentrations of ``ingestions`` to ``output``.
 
-    ``start`` defaults to the earliest ingestion and ``stop`` to now. Only
-    ingestions inside that window are plotted. Returns the names of the
-    substances that were plotted, sorted by name; an empty list means the
-    window held no ingestions (an empty plot is still written).
+    ``start`` defaults to the earliest ingestion and ``stop`` to now. The
+    substances plotted are those dosed inside that window; doses of the same
+    substances up to ``carry_over`` before the window also contribute to the
+    curves, so a plot starting mid-dose does not begin at zero. Returns the
+    names of the substances that were plotted, sorted by name; an empty list
+    means the window held no ingestions (an empty plot is still written).
     """
     _require_matplotlib()
     if blood_volume <= 0.0:
@@ -120,10 +127,7 @@ def plot_plasma_concentrations(
         raise PlotError("stop time must be after start time")
 
     colors = _theme_colors(theme, text_color, grid_color, background_color)
-    grouped: dict[str, list[Ingestion]] = {}
-    for ingestion in ingestions:
-        if start <= _aware(ingestion.timestamp) <= stop:
-            grouped.setdefault(ingestion.substance, []).append(ingestion)
+    grouped = _window_ingestions(ingestions, start, stop, carry_over)
     substances = sorted(grouped)
 
     grid = _sample_times(start, stop, samples)
@@ -204,6 +208,31 @@ def parse_resolution(spec: str) -> tuple[int, int]:
 # --------------------------------------------------------------------------
 # Model
 # --------------------------------------------------------------------------
+def _window_ingestions(
+    ingestions: list[Ingestion],
+    start: datetime,
+    stop: datetime,
+    carry_over: timedelta | None,
+) -> dict[str, list[Ingestion]]:
+    """Doses per substance that shape the curves inside [start, stop].
+
+    A substance is included when it was dosed inside the window; its doses
+    from the ``carry_over`` period before the window are added so that their
+    remaining concentration is drawn from the first sample on.
+    """
+    grouped: dict[str, list[Ingestion]] = {}
+    for ingestion in ingestions:
+        if start <= _aware(ingestion.timestamp) <= stop:
+            grouped.setdefault(ingestion.substance, []).append(ingestion)
+    if carry_over:
+        earliest = start - carry_over
+        for ingestion in ingestions:
+            moment = _aware(ingestion.timestamp)
+            if ingestion.substance in grouped and earliest <= moment < start:
+                grouped[ingestion.substance].append(ingestion)
+    return grouped
+
+
 def _is_intravenous(route: str) -> bool:
     return route.strip().lower() == "intravenous"
 

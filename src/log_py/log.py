@@ -25,7 +25,7 @@ from rich.console import Console
 
 from log_py.effects import IE_EFFECTS
 from log_py.salts import SALT_ALIASES, SALT_CHOICES
-from log_py.plot import DEFAULT_MAIN_FONT, Ingestion, PlotError, parse_font, plot_plasma_concentrations
+from log_py.plot import DEFAULT_MAIN_FONT, Ingestion, PlotError, parse_font, parse_resolution, plot_plasma_concentrations
 from log_py import menu
 from log_py.menu import (
     BACK_CHOICE,
@@ -401,6 +401,7 @@ class LogConfig(BaseModel):
     plotviewer: str | None = None
     countsupplies: bool = False
     countstash: bool = False
+    plotresolution: str | None = None
 
     @field_validator("logfile", mode="after")
     def valiadte_path(cls, logfile: Path):
@@ -3483,23 +3484,20 @@ def _plot_logs(
     font: str = DEFAULT_MAIN_FONT,
     only: set[str] | None = None,
     exclude: set[str] | None = None,
+    resolution: str | None = None,
 ) -> bool:
     """Plot the log's plasma concentrations to ``output``; False when nothing was plotted."""
     ingestions = _filter_plot_ingestions(_plot_ingestions(logfile), only, exclude)
     if not ingestions:
         err_con.print("No ingestions with a weight found in the log.", style="bold yellow")
         return False
-    family, size = parse_font(font, 8)
-    legend_font = f"{family},{max(size - 1, 1):g}"
     try:
-        substances = plot_plasma_concentrations(
-            ingestions,
-            output,
-            start,
-            stop,
-            main_font=f"{family},{size:g}",
-            legend_font=legend_font,
-        )
+        family, size = parse_font(font, 8)
+        legend_font = f"{family},{max(size - 1, 1):g}"
+        options = {"main_font": f"{family},{size:g}", "legend_font": legend_font}
+        if resolution:
+            options["resolution"] = parse_resolution(resolution)
+        substances = plot_plasma_concentrations(ingestions, output, start, stop, **options)
     except PlotError as exc:
         raise typer.BadParameter(str(exc)) from None
     if not substances:
@@ -3639,7 +3637,13 @@ def _plot_follow_up(mode: InputMode, start: datetime, stop: datetime) -> str:
     return _select_statistics_choice(mode, title, choices)
 
 
-def _plot_action(mode: InputMode, logfile: Path, viewer: str | None, font: str = DEFAULT_MAIN_FONT) -> None:
+def _plot_action(
+    mode: InputMode,
+    logfile: Path,
+    viewer: str | None,
+    font: str = DEFAULT_MAIN_FONT,
+    resolution: str | None = None,
+) -> None:
     """The "Plot" action: time span, substance white/blacklist, draw, display, then
     offer the neighbouring periods of the same length."""
     time_range = _plot_time_range(mode)
@@ -3652,7 +3656,7 @@ def _plot_action(mode: InputMode, logfile: Path, viewer: str | None, font: str =
     only, exclude = substance_filter
     while True:
         try:
-            plotted = _plot_logs(logfile, PLOT_FILE, start, stop, font, only, exclude)
+            plotted = _plot_logs(logfile, PLOT_FILE, start, stop, font, only, exclude, resolution)
         except typer.BadParameter as exc:
             err_con.print(str(exc), style="bold yellow")
             return
@@ -6148,6 +6152,11 @@ def log_ingestion(
         help='font of the plot, gnuplot style "name,size"',
         rich_help_panel="Plot Options",
     )] = DEFAULT_MAIN_FONT,
+    plotresolution: Annotated[str | None, typer.Option(
+        "--plot-resolution",
+        help="size of the plot image as WIDTHxHEIGHT, e.g. 1280x720 (default: 720x480)",
+        rich_help_panel="Plot Options",
+    )] = None,
     plotviewer: Annotated[str | None, typer.Option(
         "--plot-viewer",
         help='command that displays the plot drawn by the "Plot" menu action, e.g. "imv" or "feh {file}"; '
@@ -6309,6 +6318,7 @@ def log_ingestion(
             _parse_plot_time(plot_start, "--plot-start") if plot_start else None,
             _parse_plot_time(plot_stop, "--plot-stop") if plot_stop else None,
             plot_font,
+            resolution=plotresolution,
         )
         return
 
@@ -6330,7 +6340,7 @@ def log_ingestion(
             return False
         if action == ACTION_PLOT:
             if _menu_logfile(logfile) is not None:
-                _plot_action(mode, logfile, plotviewer, plot_font)
+                _plot_action(mode, logfile, plotviewer, plot_font, plotresolution)
             return False
         if action == ACTION_SETTINGS:
             _edit_settings(
@@ -6348,6 +6358,7 @@ def log_ingestion(
                     "plotviewer": plotviewer,
                     "countsupplies": countsupplies,
                     "countstash": countstash,
+                    "plotresolution": plotresolution,
                 },
             )
             return False
