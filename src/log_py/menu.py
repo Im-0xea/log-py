@@ -324,7 +324,12 @@ def _recolored_icon(icon_name: str) -> str:
         return icon_name
     return str(cache_file)
 
-def _menu_entry_with_icon(label: str, value: str | None) -> str:
+def _menu_entry_with_icon(label: str, value: str | None, icons_by_value: dict[str, str] | None = None) -> str:
+    """The fuzzel entry for a choice: an icon file given for the value wins over
+    the theme icon registered for it in MENU_ICONS."""
+    icon_file = (icons_by_value or {}).get(value or "") or (icons_by_value or {}).get(label)
+    if icon_file:
+        return f"{label}\0icon\x1f{icon_file}"
     icon_name = MENU_ICONS.get(value or "") or MENU_ICONS.get(label)
     if not icon_name:
         return label
@@ -340,6 +345,7 @@ def _menu_for_value(
     labels_by_value: dict[str, str] | None = None,
     allow_back: bool = False,
     keep_custom_prefix: bool = False,
+    icons_by_value: dict[str, str] | None = None,
 ) -> str | None:
     if executable == InputMode.menu.value:
         if not MENU_TOOL_COMMAND:
@@ -355,7 +361,7 @@ def _menu_for_value(
         menu_candidates = [*menu_candidates, BACK_CHOICE]
     labels, label_values = _menu_candidates(menu_candidates, aliases, labels_by_value, keep_custom_prefix)
     if executable == InputMode.menu.value and _menu_icons_enabled():
-        menu_lines = [_menu_entry_with_icon(item, label_values.get(item)) for item in labels]
+        menu_lines = [_menu_entry_with_icon(item, label_values.get(item), icons_by_value) for item in labels]
     else:
         menu_lines = labels
     menu_input = "\n".join(menu_lines)

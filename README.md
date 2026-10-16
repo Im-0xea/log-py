@@ -127,6 +127,8 @@ logpy --menu-tool "fuzzel --dmenu --prompt={prompt}"
 
 In fuzzel mode the choices carry icons from fuzzel's configured icon theme (`--icon-theme` on its command line, else `icon-theme` in `fuzzel.ini`, else hicolor). Because symbolic theme icons have a fixed dark fill, logpy copies each icon to `~/.config/logpy/icons/` with the fill replaced by `--menu-icon-color`, white by default, and hands fuzzel that copy. Pass an empty colour to use the theme icons as they are.
 
+Substance choices in fuzzel mode carry the substance's chemical structure drawing instead of a theme icon when `~/.config/logpy/structure/<name>.svg` exists, where `<name>` is the lowercase title with spaces replaced by underscores (such as `caffeine.svg` or `alpha_methyl_tryptamine.svg`; an alias finds its title's drawing). `--sync-choices` downloads the missing drawings of every substance in the history from `https://anodyne.wiki/structure/<name>.svg`, skipping substances the wiki has no drawing for and giving up for the run after three failed requests in a row. The drawings are used as they are, without recolouring.
+
 Menu tools select the best matching entry when Enter is pressed, so typed text that resembles an entry (such as `3 minutes ago` next to `30 minutes ago`) selects that entry. Pick "Custom time" in the "Minutes ago" menu to type a value freely, or prefix typed text with `~` to force it in any menu (dmenu and fuzzel also output the raw input on Shift+Enter).
 
 `--menu-tool` runs the given command for every selection, feeding the choices on stdin and reading the chosen line from stdout. `{prompt}` anywhere in the command is replaced by the prompt text; without it, `-p <prompt>` is appended, which dmenu, bemenu, rofi, and wofi understand.
@@ -151,7 +153,7 @@ The "Plot" action of the main menu draws the estimated blood plasma concentratio
 | `--bemenu` | | prompt for ingestion fields with bemenu selectors |
 | `--fuzzel` | `-mf` | prompt for ingestion fields with fuzzel selectors, same as `--menu-tool "fuzzel --dmenu"` |
 | `--menu-tool` | `-mt` | prompt for ingestion fields with a custom dmenu-style command, e.g. `rofi -dmenu`; `{prompt}` is replaced by the prompt text, otherwise `-p <prompt>` is appended |
-| `--sync-choices` | | scan the CSV log and refresh menu choices, dosages, salts, and substance abbreviations |
+| `--sync-choices` | | scan the CSV log and refresh menu choices, dosages, salts, and substance abbreviations; downloads missing structure drawings for fuzzel substance icons |
 | `--log-ingestion` | | start prompt/menu mode directly in the ingestion logger |
 | `--stack-menu` | | start prompt/menu mode directly in the interactive supply stack editor |
 | `--stash-menu` | | start prompt/menu mode directly in the interactive stash editor |

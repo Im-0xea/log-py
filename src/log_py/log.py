@@ -82,6 +82,12 @@ STASH_CACHE_FILE = app_dir / "stash.json"
 STASH_CACHE_VERSION = 1
 WEBHOOK_MESSAGE_CACHE_FILE = app_dir / "webhook-messages.json"
 USERPAGE_CACHE_FILE = app_dir / "userpage.json"
+# Chemical structure drawings shown as substance icons in fuzzel mode; missing
+# ones are downloaded from AnodyneWiki by --sync-choices.
+STRUCTURE_ICON_DIR = app_dir / "structure"
+STRUCTURE_URL_TEMPLATE = "https://anodyne.wiki/structure/{key}.svg"
+# Consecutive failed structure downloads after which the sync stops trying.
+STRUCTURE_DOWNLOAD_MAX_FAILURES = 3
 DEFAULT_LOGFILE = app_dir / "logs.csv"
 LOG_HEADER = ["timestamp", "user", "med", "amount", "ROA", "comment"]
 USERSYNC_URL_TEMPLATE = "https://anodyne.wiki/api/usersync/{name}"
@@ -455,6 +461,93 @@ def _normalize_api_abbreviations(value) -> list[str]:
     return []
 
 
+def _structure_key(title: str) -> str:
+    """File name stem of a substance's structure drawing: lowercase, spaces as underscores."""
+    return title.strip().lower().replace(" ", "_")
+
+
+def _structure_icon_file(title: str) -> Path | None:
+    """The local structure drawing of a substance (by its title or alias), if present."""
+    for name in (title, _resolve_alias(title, SUBSTANCE_ALIASES) or title):
+        key = _structure_key(name)
+        if not key or "/" in key:
+            continue
+        icon_file = STRUCTURE_ICON_DIR / f"{key}.svg"
+        if icon_file.is_file():
+            return icon_file
+    return None
+
+
+def _substance_icons(candidates: list[str]) -> dict[str, str]:
+    """Structure drawings for the substance choices that have one on disk."""
+    icons = {}
+    for candidate in candidates:
+        icon_file = _structure_icon_file(candidate)
+        if icon_file is not None:
+            icons[candidate] = str(icon_file)
+    return icons
+
+
+def _download_structure_icon(title: str) -> bool | None:
+    """Fetch a substance's structure drawing into STRUCTURE_ICON_DIR.
+
+    Returns True when written, False when AnodyneWiki has none (or sent no SVG),
+    and None when the request itself failed.
+    """
+    key = _structure_key(title)
+    try:
+        response = requests.get(STRUCTURE_URL_TEMPLATE.format(key=key), timeout=5)
+    except Exception:
+        return None
+    if response.status_code == 404:
+        return False
+    if response.status_code != 200:
+        return None
+    body = response.content.lstrip()
+    if not body.startswith(b"<") or b"<svg" not in body[:4096]:
+        return False
+    try:
+        STRUCTURE_ICON_DIR.mkdir(parents=True, exist_ok=True)
+        (STRUCTURE_ICON_DIR / f"{key}.svg").write_bytes(response.content)
+    except OSError:
+        return None
+    return True
+
+
+def _download_structure_icons(titles: list[str]) -> int:
+    """Download the structure drawings missing on disk for `titles`; returns how many were saved."""
+    pending = []
+    seen = set()
+    for title in titles:
+        key = _structure_key(title)
+        if not key or "/" in key or key in seen or _is_list_value(title):
+            continue
+        seen.add(key)
+        if not (STRUCTURE_ICON_DIR / f"{key}.svg").is_file():
+            pending.append(title)
+    if not pending:
+        return 0
+    con.print(f"Downloading {len(pending)} structure drawings from AnodyneWiki...")
+    saved = 0
+    failures = 0
+    for index, title in enumerate(pending, 1):
+        con.print(f"[{index}/{len(pending)}] {title}")
+        result = _download_structure_icon(title)
+        if result is None:
+            failures += 1
+            if failures >= STRUCTURE_DOWNLOAD_MAX_FAILURES:
+                err_con.print(
+                    f"Structure downloads failed {failures} times in a row; skipping the rest",
+                    style="bold yellow",
+                )
+                break
+            continue
+        failures = 0
+        if result:
+            saved += 1
+    return saved
+
+
 def _fetch_substance_entry_result(substance: str) -> tuple[dict[str, object] | None, bool]:
     try:
         response = requests.get(f"https://anodyne.wiki/api/substance/{substance}", timeout=5)
@@ -717,7 +810,13 @@ def _sync_choices_from_history(logfile: Path) -> tuple[list[str], dict[str, list
     if changed:
         _write_substance_cache(cache)
     _merge_cached_substance_aliases(cache)
-    return _sync_choice_cache_from_history(logfile)
+    synced = _sync_choice_cache_from_history(logfile)
+    saved = _download_structure_icons(
+        [_resolve_alias(substance, SUBSTANCE_ALIASES) or substance for substance in synced[0]]
+    )
+    if saved:
+        con.print(f"Saved {saved} structure drawings to {STRUCTURE_ICON_DIR}")
+    return synced
 
 TIME_OFFSET_RE = re.compile(
     r"^\s*(?P<amount>[+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*"
@@ -5208,6 +5307,7 @@ def _collect_substances_menu(
                     aliases=SUBSTANCE_ALIASES,
                     optional=index > 1,
                     allow_back=allow_back,
+                    icons_by_value=_substance_icons(candidates),
                 )
             except BackRequested:
                 if index == 1:
