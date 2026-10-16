@@ -218,6 +218,14 @@ PLOT_RANGE_MONTH = "Last month"
 PLOT_RANGE_YEAR = "Last year"
 PLOT_RANGE_ALL = "All time"
 PLOT_RANGE_CUSTOM = "Custom range"
+PLOT_SUBSTANCES_ALL = "All substances"
+PLOT_SUBSTANCES_ONLY = "Only selected"
+PLOT_SUBSTANCES_EXCEPT = "All except selected"
+PLOT_SELECTION_DONE = "Done"
+PLOT_NEXT_PREVIOUS = "Previous period"
+PLOT_NEXT_NEXT = "Next period"
+PLOT_NEXT_SUBSTANCES = "Change substances"
+PLOT_NEXT_RANGE = "Change range"
 PLOT_RANGE_DELTAS = {
     PLOT_RANGE_DAY: timedelta(days=1),
     PLOT_RANGE_THREE_DAYS: timedelta(days=3),
@@ -251,6 +259,14 @@ MENU_ICONS.update({
     ACTION_STATISTICS: "x-office-spreadsheet-symbolic",
     ACTION_PLOT: "image-x-generic-symbolic",
     PLOT_RANGE_CUSTOM: "document-edit-symbolic",
+    PLOT_SUBSTANCES_ALL: "edit-select-all-symbolic",
+    PLOT_SUBSTANCES_ONLY: "object-select-symbolic",
+    PLOT_SUBSTANCES_EXCEPT: "edit-clear-symbolic",
+    PLOT_SELECTION_DONE: "emblem-ok-symbolic",
+    PLOT_NEXT_PREVIOUS: "go-previous-symbolic",
+    PLOT_NEXT_NEXT: "go-next-symbolic",
+    PLOT_NEXT_SUBSTANCES: "applications-science-symbolic",
+    PLOT_NEXT_RANGE: "x-office-calendar-symbolic",
     ACTION_SETTINGS: "emblem-system-symbolic",
     BACK_CHOICE: "go-previous-symbolic",
     DONE_SUBSTANCE_CHOICE: "go-next-symbolic",
@@ -349,6 +365,44 @@ IV_SITE_WIKIPEDIA_ARTICLES = {
     "great-saphenous": "Great_saphenous_vein",
 }
 DAILY_USAGE_TODAY = "today"
+
+# Icons for the Route prompt and, for intravenous routes, the Vein and Side
+# prompts (freedesktop icon names from fuzzel's theme, see MENU_ICONS).
+ROUTE_ICONS = {
+    "oral": "face-smile-symbolic",
+    "sublingual": "face-raspberry-symbolic",
+    "buccal": "face-kiss-symbolic",
+    "intranasal": "face-sick-symbolic",
+    "inhaled": "weather-fog-symbolic",
+    "intravenous": "color-select-symbolic",
+    "intramuscular": "emoji-body-symbolic",
+    "subcutaneous": "mark-location-symbolic",
+    "intradermal": "input-tablet-symbolic",
+    "intrarectal": "go-bottom-symbolic",
+    "transdermal": "input-touchpad-symbolic",
+}
+IV_SITE_ICONS = {
+    "jugular": "avatar-default-symbolic",
+    "median-cubital": "emoji-body-symbolic",
+    "basilic": "emoji-body-symbolic",
+    "cephalic": "emoji-body-symbolic",
+    "dorsal-metacarpal": "input-touchpad-symbolic",
+    "dorsal-venous-network": "input-touchpad-symbolic",
+    "dorsal-venous-network-thumb": "input-touchpad-symbolic",
+    "femoral": "go-down-symbolic",
+    "great-saphenous": "go-down-symbolic",
+    "small-saphenous": "go-down-symbolic",
+    "venous-arch": "go-bottom-symbolic",
+    "venous-arch-index": "go-bottom-symbolic",
+    "venous-arch-middle": "go-bottom-symbolic",
+    "venous-arch-ring": "go-bottom-symbolic",
+    "venous-arch-little": "go-bottom-symbolic",
+    "left": "go-previous-symbolic",
+    "right": "go-next-symbolic",
+}
+# Route values are shown capitalized, so register both spellings.
+MENU_ICONS.update({name: icon for route, icon in ROUTE_ICONS.items() for name in (route, route.capitalize())})
+MENU_ICONS.update(IV_SITE_ICONS)
 
 
 class IngestionCancelled(Exception):
@@ -3445,15 +3499,30 @@ def _parse_plot_time(value: str, flag: str) -> datetime:
         raise typer.BadParameter(f"Could not parse '{value}' as a date/time for {flag}") from None
 
 
+def _filter_plot_ingestions(
+    ingestions: list[Ingestion],
+    only: set[str] | None = None,
+    exclude: set[str] | None = None,
+) -> list[Ingestion]:
+    """Apply a substance whitelist (``only``) or blacklist (``exclude``)."""
+    if only is not None:
+        ingestions = [ingestion for ingestion in ingestions if ingestion.substance in only]
+    if exclude:
+        ingestions = [ingestion for ingestion in ingestions if ingestion.substance not in exclude]
+    return ingestions
+
+
 def _plot_logs(
     logfile: Path,
     output: Path,
     start: datetime | None,
     stop: datetime | None,
     font: str = DEFAULT_MAIN_FONT,
+    only: set[str] | None = None,
+    exclude: set[str] | None = None,
 ) -> bool:
     """Plot the log's plasma concentrations to ``output``; False when nothing was plotted."""
-    ingestions = _plot_ingestions(logfile)
+    ingestions = _filter_plot_ingestions(_plot_ingestions(logfile), only, exclude)
     if not ingestions:
         err_con.print("No ingestions with a weight found in the log.", style="bold yellow")
         return False
@@ -3540,19 +3609,116 @@ def _show_plot(output: Path, viewer: str | None) -> None:
         err_con.print(f"Could not open {output}: {exc}", style="bold yellow")
 
 
+def _plot_window_substances(logfile: Path, start: datetime | None, stop: datetime) -> list[str]:
+    """Substances with a dose inside the window, sorted by name."""
+    names = set()
+    for ingestion in _plot_ingestions(logfile):
+        if (start is None or start <= ingestion.timestamp) and ingestion.timestamp <= stop:
+            names.add(ingestion.substance)
+    return sorted(names, key=str.casefold)
+
+
+def _plot_select_substances(mode: InputMode, title: str, names: list[str], selected: set[str]) -> set[str] | None:
+    """Toggle substances until Done; None when the user backs out."""
+    selected = set(selected)
+    while True:
+        labels = {name: f"[{'x' if name in selected else ' '}] {name}" for name in names}
+        choice = _select_statistics_choice(mode, title, [PLOT_SELECTION_DONE, *names], labels)
+        if choice == BACK_CHOICE:
+            return None
+        if choice == PLOT_SELECTION_DONE:
+            return selected
+        if choice in selected:
+            selected.discard(choice)
+        else:
+            selected.add(choice)
+
+
+def _plot_substance_filter(
+    mode: InputMode,
+    logfile: Path,
+    start: datetime | None,
+    stop: datetime,
+    current: tuple[set[str] | None, set[str] | None] = (None, None),
+) -> tuple[set[str] | None, set[str] | None] | None:
+    """Ask which substances to plot: (only, exclude) sets; None when the user backs out."""
+    names = _plot_window_substances(logfile, start, stop)
+    if not names:
+        return current
+    while True:
+        choice = _select_statistics_choice(
+            mode,
+            "Plot substances",
+            [PLOT_SUBSTANCES_ALL, PLOT_SUBSTANCES_ONLY, PLOT_SUBSTANCES_EXCEPT],
+        )
+        if choice == BACK_CHOICE:
+            return None
+        if choice == PLOT_SUBSTANCES_ALL:
+            return None, None
+        if choice == PLOT_SUBSTANCES_ONLY:
+            selected = _plot_select_substances(mode, "Only", names, current[0] or set())
+            if selected is not None:
+                return selected, None
+        elif choice == PLOT_SUBSTANCES_EXCEPT:
+            selected = _plot_select_substances(mode, "Except", names, current[1] or set())
+            if selected is not None:
+                return None, selected
+
+
+def _plot_follow_up(mode: InputMode, start: datetime, stop: datetime) -> str:
+    """What to do after the plot was shown."""
+    choices = [PLOT_NEXT_PREVIOUS]
+    if datetime.now(timezone.utc) - stop > timedelta(minutes=1):
+        # Only when the period does not already end at "now".
+        choices.append(PLOT_NEXT_NEXT)
+    choices.extend([PLOT_NEXT_SUBSTANCES, PLOT_NEXT_RANGE])
+    title = f"Plot {start.astimezone():%H:%M %d.%m.%Y} - {stop.astimezone():%H:%M %d.%m.%Y}"
+    return _select_statistics_choice(mode, title, choices)
+
+
 def _plot_action(mode: InputMode, logfile: Path, viewer: str | None, font: str = DEFAULT_MAIN_FONT) -> None:
-    """The "Plot" action: ask for the time span, draw the plot and display it."""
+    """The "Plot" action: time span, substance white/blacklist, draw, display, then
+    offer the neighbouring periods of the same length."""
     time_range = _plot_time_range(mode)
     if time_range is None:
         return
     start, stop = time_range
-    try:
-        plotted = _plot_logs(logfile, PLOT_FILE, start, stop, font)
-    except typer.BadParameter as exc:
-        err_con.print(str(exc), style="bold yellow")
+    substance_filter = _plot_substance_filter(mode, logfile, start, stop)
+    if substance_filter is None:
         return
-    if plotted:
-        _show_plot(PLOT_FILE, viewer)
+    only, exclude = substance_filter
+    while True:
+        try:
+            plotted = _plot_logs(logfile, PLOT_FILE, start, stop, font, only, exclude)
+        except typer.BadParameter as exc:
+            err_con.print(str(exc), style="bold yellow")
+            return
+        if plotted:
+            _show_plot(PLOT_FILE, viewer)
+        if start is None:
+            # "All time" began at the first dose; use it for the period arithmetic.
+            timestamps = [ingestion.timestamp for ingestion in _plot_ingestions(logfile)]
+            if not timestamps:
+                return
+            start = min(timestamps)
+        choice = _plot_follow_up(mode, start, stop)
+        if choice == BACK_CHOICE:
+            return
+        length = stop - start
+        if choice == PLOT_NEXT_PREVIOUS:
+            start, stop = start - length, start
+        elif choice == PLOT_NEXT_NEXT:
+            start, stop = stop, stop + length
+        elif choice == PLOT_NEXT_SUBSTANCES:
+            substance_filter = _plot_substance_filter(mode, logfile, start, stop, (only, exclude))
+            if substance_filter is None:
+                return
+            only, exclude = substance_filter
+        elif choice == PLOT_NEXT_RANGE:
+            time_range = _plot_time_range(mode)
+            if time_range is None:
+                return
+            start, stop = time_range
 
 
 def _show_statistics(mode: InputMode, logfile: Path) -> None:
