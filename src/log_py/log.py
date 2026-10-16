@@ -1412,7 +1412,26 @@ SUPPLY_QUANTITY_RE = re.compile(r"^\s*(?P<count>\d+)\s*x\b\s*(?P<description>.+?
 
 
 def _empty_supply_cache() -> dict[str, object]:
-    return {"version": SUPPLY_CACHE_VERSION, "syringes": [], "needles": []}
+    return {"version": SUPPLY_CACHE_VERSION, "syringes": [], "needles": [], "types": _empty_supply_types()}
+
+
+def _empty_supply_types() -> dict[str, list[str]]:
+    return {"syringes": [], "needles": []}
+
+
+def _valid_supply_types(value) -> dict[str, list[str]]:
+    """Syringe and needle descriptions remembered without stock behind them."""
+    types = _empty_supply_types()
+    if not isinstance(value, dict):
+        return types
+    for kind in types:
+        items = value.get(kind)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, str) and item.strip():
+                _append_recent_unique(types[kind], item)
+    return types
 
 
 def _valid_supply_entries(value) -> list[dict[str, object]]:
@@ -1466,6 +1485,7 @@ def _load_supply_cache() -> dict[str, object]:
         "version": SUPPLY_CACHE_VERSION,
         "syringes": _valid_supply_entries(raw_cache.get("syringes")),
         "needles": _valid_supply_entries(raw_cache.get("needles")),
+        "types": _valid_supply_types(raw_cache.get("types")),
     }
 
 
@@ -1475,6 +1495,7 @@ def _write_supply_cache(cache: dict[str, object]) -> None:
         "version": SUPPLY_CACHE_VERSION,
         "syringes": _valid_supply_entries(cache.get("syringes")),
         "needles": _valid_supply_entries(cache.get("needles")),
+        "types": _valid_supply_types(cache.get("types")),
     }
     tmpfile = SUPPLY_CACHE_FILE.with_suffix(f"{SUPPLY_CACHE_FILE.suffix}.tmp")
     with open(tmpfile, "w") as outfile:
@@ -1772,11 +1793,25 @@ def _uncounted_supply_entry(kind: str, description: str) -> dict[str, object]:
     return entry
 
 
+def _remember_supply_type(kind: str, description: str) -> None:
+    """Keep a custom syringe/needle description for the next uncounted prompt."""
+    cache = _load_supply_cache()
+    types = _valid_supply_types(cache.get("types"))
+    known = [item for item in types[kind] if _alias_key(item) != _alias_key(description)]
+    types[kind] = [description.strip(), *known]
+    cache["types"] = types
+    _write_supply_cache(cache)
+
+
 def _logged_supply_descriptions(logfile: Path, kind: str) -> list[str]:
-    """Syringe sizes or needle "gauge length" specs seen in the history, newest first."""
-    if kind == "syringes":
-        return _read_logged_syringe_sizes(logfile)
-    return _read_logged_needle_specs(logfile)
+    """Remembered custom types first, then the syringe sizes or needle
+    "gauge length" specs seen in the history, newest first."""
+    descriptions = list(_valid_supply_types(_load_supply_cache().get("types"))[kind])
+    logged = _read_logged_syringe_sizes(logfile) if kind == "syringes" else _read_logged_needle_specs(logfile)
+    for item in logged:
+        if not any(_alias_key(item) == _alias_key(known) for known in descriptions):
+            descriptions.append(item)
+    return descriptions
 
 
 def _interactive_uncounted_supply(
@@ -1820,6 +1855,9 @@ def _interactive_uncounted_supply(
         selected = _interactive_supply_spec(mode, "Syringe Supply" if kind == "syringes" else "Needle Supply")
         if not selected:
             return None
+        entry = _uncounted_supply_entry(kind, selected)
+        _remember_supply_type(kind, selected)
+        return entry
     return _uncounted_supply_entry(kind, selected)
 
 
