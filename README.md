@@ -28,6 +28,8 @@ nusersync = "yourname" # AnodyneWiki usersync user name
 pusersync = "secret"   # AnodyneWiki usersync password; with both set, userpage.json is uploaded after every local change
 notify = true # sends a desktop notification after logging an ingestion
 plotviewer = "imv" # command that displays the plot drawn by the "Plot" action (default: xdg-open)
+countsupplies = true # track syringe/needle stock: "Supplies" menu and stock counters (default: false)
+countstash = true # track substance amounts: "Stash" menu and stash counters (default: false)
 ```
 
 When `userpage` points at an AnodyneWiki user page such as `https://anodyne.wiki/user/0xea` and `~/.config/logpy/userpage.json` does not exist yet, logpy downloads `https://anodyne.wiki/api/user/0xea` to that file on its next run. A failed download prints a warning and does not block logging.
@@ -95,6 +97,8 @@ logpy --add-stash "500mg Ketamine"
 logpy --remove-stash "25mg Ketamine"
 logpy --stash
 ```
+
+Supply and stash tracking are off unless `countsupplies` and `countstash` are set to `true` (or `--count-supplies` / `--count-stash` are passed). While off, the "Supplies" and "Stash" entries are missing from the main menu, `--stack-menu` and `--stash-menu` are refused, and logging an ingestion changes no counters. Injection routes still ask which syringe and needle were used: the prompts list Skip, the sizes and gauge/length combinations found in the history, and "Specify a new ... type", and the answer is only recorded in the note (`syringe-size:`, `needle-gauge:`, `needle-length:`), without the stock keys. The `--add-syringe`, `--add-stash` and similar flags keep working on the caches regardless.
 
 Stash amounts are stored in `~/.config/logpy/stash.json`. When an ingestion is logged, the matching stash entry is decremented by the logged dosage amount when the dosage can be parsed as a single numeric amount with a supported unit (`g`, `mg`, `ug`/`mcg`, or `ml`). Mixture rows decrement each matching component independently.
 
@@ -188,6 +192,8 @@ The "Plot" action of the main menu draws the estimated blood plasma concentratio
 | `--user` | `-u` | username |
 | `--webhook` | `-w` | Discord webhook URL |
 | `--notify` | | send a desktop notification after logging an ingestion |
+| `--count-supplies` | | track syringe and needle stock: shows the Supplies menu and decrements the stock with every log (default off) |
+| `--count-stash` | | track substance amounts: shows the Stash menu and decrements the stash with every log (default off) |
 | `--config` | `-c` | config file path |
 
 ## Ingestion CSV format

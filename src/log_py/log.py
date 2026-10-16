@@ -227,6 +227,11 @@ PLOT_RANGE_DELTAS = {
 }
 PLOT_FILE = app_dir / "plot.png"
 DEFAULT_PLOT_VIEWER = "xdg-open"
+# Whether syringe/needle stock and substance stash are tracked (the Supplies
+# and Stash menus, and the counters decremented by every log). Set from the
+# countsupplies/countstash config keys at startup.
+COUNT_SUPPLIES = False
+COUNT_STASH = False
 
 # Icon names attached to menu choices in fuzzel mode. They are freedesktop icon
 # names, resolved by fuzzel through its configured icon theme.
@@ -377,6 +382,8 @@ class LogConfig(BaseModel):
     mouse: bool = True
     notify: bool = False
     plotviewer: str | None = None
+    countsupplies: bool = False
+    countstash: bool = False
 
     @field_validator("logfile", mode="after")
     def valiadte_path(cls, logfile: Path):
@@ -1368,14 +1375,16 @@ def _append_note_supply_entries(
             note = _append_note_token(note, "reused-syringe", NOTE_REUSED_SYRINGE_RE)
         if _is_non_disposable_syringe_entry(syringe):
             note = _append_note_token(note, "non-disposable-syringe", NOTE_NON_DISPOSABLE_SYRINGE_RE)
-        syringe_key = _supply_entry_current_key("syringe", syringe)
-        note = _append_note_supply_key(note, "syringe", syringe_key, NOTE_SYRINGE_KEY_RE)
+        if not syringe.get("uncounted"):
+            syringe_key = _supply_entry_current_key("syringe", syringe)
+            note = _append_note_supply_key(note, "syringe", syringe_key, NOTE_SYRINGE_KEY_RE)
         note = _append_note_syringe_size(note, syringe.get("size") if isinstance(syringe.get("size"), str) else None)
     if needle:
         if _is_reused_supply_entry("needle", needle):
             note = _append_note_token(note, "reused-needle", NOTE_REUSED_NEEDLE_RE)
-        needle_key = _supply_entry_current_key("needle", needle)
-        note = _append_note_supply_key(note, "needle", needle_key, NOTE_NEEDLE_KEY_RE)
+        if not needle.get("uncounted"):
+            needle_key = _supply_entry_current_key("needle", needle)
+            note = _append_note_supply_key(note, "needle", needle_key, NOTE_NEEDLE_KEY_RE)
         note = _append_note_needle_gauge(note, needle.get("gauge") if isinstance(needle.get("gauge"), str) else None)
         note = _append_note_needle_length(note, needle.get("length") if isinstance(needle.get("length"), str) else None)
     return note
@@ -1734,6 +1743,66 @@ def _menu_for_supply_entry(executable: str, label: str, kind: str, allow_back: b
         if selected_label == entry_label:
             return entry
     raise typer.BadParameter(f"{label} selection is not in the stack")
+
+
+def _uncounted_supply_entry(kind: str, description: str) -> dict[str, object]:
+    """A syringe/needle described for the note only, with no stock behind it."""
+    parser = _parse_syringe_supply if kind == "syringes" else _parse_needle_supply
+    entry = parser(f"1x {description}")
+    entry.pop("count", None)
+    entry["uncounted"] = True
+    return entry
+
+
+def _logged_supply_descriptions(logfile: Path, kind: str) -> list[str]:
+    """Syringe sizes or needle "gauge length" specs seen in the history, newest first."""
+    if kind == "syringes":
+        return _read_logged_syringe_sizes(logfile)
+    return _read_logged_needle_specs(logfile)
+
+
+def _interactive_uncounted_supply(
+    mode: InputMode,
+    label: str,
+    kind: str,
+    logfile: Path,
+    allow_back: bool = False,
+) -> dict[str, object] | None:
+    """Ask which syringe/needle was used when supplies are not counted.
+
+    Lists Skip, the types seen in the history and "Specify a new ... type";
+    the choice only ends up in the note, no stock is touched.
+    """
+    custom = SUPPLY_ACTION_SPECIFY_NEW_SYRINGE if kind == "syringes" else SUPPLY_ACTION_SPECIFY_NEW_NEEDLE
+    choices = [SUPPLY_ACTION_SKIP, *_logged_supply_descriptions(logfile, kind), custom]
+    if mode == InputMode.prompt:
+        _print_prompt_choices(label, choices)
+        value = _prompt_for_value(label, choices[0], optional=False)
+        try:
+            selected_index = int(value)
+        except (TypeError, ValueError):
+            selected = _resolve_alias(value, SUPPLY_ACTION_ALIASES) or value
+        else:
+            if selected_index < 1 or selected_index > len(choices):
+                raise typer.BadParameter(f"{label} selection out of range")
+            selected = choices[selected_index - 1]
+    else:
+        selected = _menu_for_value(
+            mode.value,
+            label,
+            choices[0],
+            candidates=choices,
+            aliases=SUPPLY_ACTION_ALIASES,
+            allow_back=allow_back,
+        )
+        selected = _resolve_alias(selected or "", SUPPLY_ACTION_ALIASES) or selected
+    if not selected or selected == SUPPLY_ACTION_SKIP:
+        return None
+    if selected == custom:
+        selected = _interactive_supply_spec(mode, "Syringe Supply" if kind == "syringes" else "Needle Supply")
+        if not selected:
+            return None
+    return _uncounted_supply_entry(kind, selected)
 
 
 def _note_needle_gauge(note: str | None) -> str | None:
@@ -2175,7 +2244,12 @@ def _edit_settings(mode: InputMode, config_file: Path, current_values: dict[str,
 
 
 def _select_prompt_action(mode: InputMode, include_userpage: bool = True) -> str:
-    actions = [ACTION_LOG_INGESTION, ACTION_EDIT_SUPPLY_STACK, ACTION_EDIT_STASH, ACTION_HISTORY, ACTION_STATISTICS, ACTION_PLOT]
+    actions = [ACTION_LOG_INGESTION]
+    if COUNT_SUPPLIES:
+        actions.append(ACTION_EDIT_SUPPLY_STACK)
+    if COUNT_STASH:
+        actions.append(ACTION_EDIT_STASH)
+    actions.extend([ACTION_HISTORY, ACTION_STATISTICS, ACTION_PLOT])
     if include_userpage:
         actions.append(ACTION_USERPAGE)
     actions.append(ACTION_SETTINGS)
@@ -2198,8 +2272,12 @@ def _resolve_base_prompt_action(
     if log_ingestion_action:
         return ACTION_LOG_INGESTION
     if stack_menu_action:
+        if not COUNT_SUPPLIES:
+            raise typer.BadParameter("--stack-menu needs countsupplies = true (or --count-supplies)")
         return ACTION_EDIT_SUPPLY_STACK
     if stash_menu_action:
+        if not COUNT_STASH:
+            raise typer.BadParameter("--stash-menu needs countstash = true (or --count-stash)")
         return ACTION_EDIT_STASH
     return None
 
@@ -5201,6 +5279,30 @@ def _read_logged_syringe_sizes(logfile: Path) -> list[str]:
     return sizes
 
 
+def _read_logged_needle_specs(logfile: Path) -> list[str]:
+    """"<gauge> <length>" of every needle in the history, newest first."""
+    if not logfile.exists():
+        return []
+
+    specs = []
+    with open(logfile, newline="") as infile:
+        for row in csv.reader(infile):
+            if len(row) <= 7 or row[2].strip().lower() in ("substance", "med"):
+                continue
+            gauge_match = NOTE_GAUGE_RE.search(row[7])
+            length_match = NOTE_LENGTH_RE.search(row[7])
+            if not gauge_match or not length_match:
+                continue
+            try:
+                gauge = _format_needle_gauge(gauge_match.group("gauge"))
+                length = _format_needle_length(length_match.group("length"))
+            except typer.BadParameter:
+                continue
+            if gauge and length:
+                _append_recent_unique(specs, f"{gauge} {length}")
+    return specs
+
+
 def _menu_substance_candidates(logfile: Path, current: str | None = None) -> list[str]:
     candidates = []
     seen = set()
@@ -5473,9 +5575,12 @@ def _collect_input(
         volume = _prompt_for_value("Volume", volume or UNKNOWN_VOLUME_CHOICE, optional=False)
         selected_syringe = None
         selected_needle = None
-        if _route_uses_needle(roa):
+        if _route_uses_needle(roa) and COUNT_SUPPLIES:
             selected_syringe = _prompt_for_supply_entry("Syringe", "syringes")
             selected_needle = _prompt_for_supply_entry("Needle", "needles")
+        elif _route_uses_needle(roa):
+            selected_syringe = _interactive_uncounted_supply(mode, "Syringe", "syringes", logfile)
+            selected_needle = _interactive_uncounted_supply(mode, "Needle", "needles", logfile)
         site = _prompt_for_site(roa, site)
         substances, dosages, salts = _collect_substances_prompt(
             substance,
@@ -5535,9 +5640,12 @@ def _collect_input(
                 break
             while True:
                 try:
-                    if _route_uses_needle(roa):
+                    if _route_uses_needle(roa) and COUNT_SUPPLIES:
                         selected_syringe = _menu_for_supply_entry(menu, "Syringe", "syringes", allow_back=True)
                         selected_needle = _menu_for_supply_entry(menu, "Needle", "needles", allow_back=True)
+                    elif _route_uses_needle(roa):
+                        selected_syringe = _interactive_uncounted_supply(mode, "Syringe", "syringes", logfile, allow_back=True)
+                        selected_needle = _interactive_uncounted_supply(mode, "Needle", "needles", logfile, allow_back=True)
                     else:
                         selected_syringe = None
                         selected_needle = None
@@ -5963,6 +6071,16 @@ def log_ingestion(
         help="send a desktop notification after logging an ingestion",
         rich_help_panel="Configuration Options",
     )] = False,
+    countsupplies: Annotated[bool, typer.Option(
+        "--count-supplies/--no-count-supplies",
+        help="track syringe and needle stock: shows the Supplies menu and decrements the stock with every log",
+        rich_help_panel="Configuration Options",
+    )] = False,
+    countstash: Annotated[bool, typer.Option(
+        "--count-stash/--no-count-stash",
+        help="track substance amounts: shows the Stash menu and decrements the stash with every log",
+        rich_help_panel="Configuration Options",
+    )] = False,
     config: Annotated[Path | None, typer.Option(
         "--config", "-c",
         callback=conf_callback_factory(_validate_config),
@@ -5976,6 +6094,9 @@ def log_ingestion(
     global USERSYNC_CREDENTIALS
 
     menu.MENU_MOUSE_ENABLED = mouse
+    global COUNT_SUPPLIES, COUNT_STASH
+    COUNT_SUPPLIES = countsupplies
+    COUNT_STASH = countstash
     USERSYNC_CREDENTIALS = (nusersync, pusersync) if nusersync and pusersync else None
     menu.MENU_ICON_COLOR = menu_icon_color.strip()
     _ensure_userpage_cache(userpage)
@@ -6096,6 +6217,8 @@ def log_ingestion(
                     "mouse": mouse,
                     "notify": notify,
                     "plotviewer": plotviewer,
+                    "countsupplies": countsupplies,
+                    "countstash": countstash,
                 },
             )
             return False
@@ -6192,8 +6315,10 @@ def log_ingestion(
             log = csv.writer(of)
             log.writerow([time_now, user, title, dosage, roa, logged_site, salt, note])
         _add_logged_choice_options(logfile, title, dosage, salt)
-        _print_supply_updates("Used supply", _decrement_logged_supplies(note))
-        _print_stash_updates("Used stash", _decrement_logged_stash(title, dosage))
+        if COUNT_SUPPLIES:
+            _print_supply_updates("Used supply", _decrement_logged_supplies(note))
+        if COUNT_STASH:
+            _print_stash_updates("Used stash", _decrement_logged_stash(title, dosage))
         if userpage:
             _update_userpage_tried_substance(title, dosage, roa, salt)
 
