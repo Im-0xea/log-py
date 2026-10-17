@@ -22,6 +22,7 @@ if TYPE_CHECKING:  # pragma: no cover
     import numpy as np
 
 DARK_BACKGROUND = "#101418"
+DOSE_MARKER_COLOR = "#ffffff"
 
 # gnuplot's default line colour sequence (the "podo" set), which the Ruby
 # version relies on. The last entry is black in gnuplot; we use the text
@@ -103,8 +104,8 @@ def plot_plasma_concentrations(
     substances plotted are those dosed inside that window; doses of the same
     substances up to ``carry_over`` before the window also contribute to the
     curves, so a plot starting mid-dose does not begin at zero. With
-    ``dose_markers`` every dose inside the window is marked by a vertical line
-    in its substance's colour. Returns the names of the substances that were
+    ``dose_markers`` every dose inside the window is marked by a dotted white
+    vertical line. Returns the names of the substances that were
     plotted, sorted by name; an empty list means the window held no ingestions
     (an empty plot is still written).
     """
@@ -463,14 +464,13 @@ def _render(
     ax.grid(True, which="major", linestyle=(0, (3, 3)), linewidth=0.5, color=grid_color)
     ax.set_axisbelow(False)
 
-    # One vertical line per dose, in the colour of its substance.
-    for moment, color_index in markers:
+    # One dotted white vertical line per dose.
+    for moment, _color_index in markers:
         ax.axvline(
             mdates.date2num(moment.astimezone(LOCAL_TZ)),
-            color=palette[color_index % len(palette)],
+            color=DOSE_MARKER_COLOR,
             linewidth=1.0,
-            linestyle="solid",
-            alpha=0.9,
+            linestyle=(0, (1, 2)),
         )
 
     if handles:
