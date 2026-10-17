@@ -183,7 +183,7 @@ def _theme_colors(
     if theme == "light":
         theme_text, theme_grid, theme_bg = "black", "grey", None
     elif theme == "dark":
-        theme_text, theme_grid, theme_bg = "white", "lightgrey", DARK_BACKGROUND
+        theme_text, theme_grid, theme_bg = "white", "grey", DARK_BACKGROUND
     else:
         raise PlotError(f"unknown theme {theme!r}, expected 'dark' or 'light'")
     return (
@@ -468,8 +468,8 @@ def _render(
         ax.axvline(
             mdates.date2num(moment.astimezone(LOCAL_TZ)),
             color=palette[color_index % len(palette)],
-            linewidth=0.8,
-            linestyle=(0, (4, 2)),
+            linewidth=1.0,
+            linestyle="solid",
             alpha=0.9,
         )
 
