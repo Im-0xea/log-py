@@ -4119,7 +4119,8 @@ def _userpage_schema(path: list[object]) -> dict[str, object]:
         return {"item": "route"}
     if pattern == (USERPAGE_SUBSTANCES_KEY, "*", USERPAGE_ROUTES_KEY, "*"):
         return {"fields": {field: "str" for field in USERPAGE_ROUTE_FIELDS}}
-    if pattern == (USERPAGE_SUBSTANCES_KEY, "*", "Effects"):
+    if pattern in ((USERPAGE_SUBSTANCES_KEY, "*", "Effects"), (USERPAGE_SUBSTANCES_KEY, "*", "After")):
+        # Effects and after-effects share the severity/effect-index picker.
         return {"item": "effect"}
     if len(pattern) == 3 and pattern[:2] == (USERPAGE_SUBSTANCES_KEY, "*") and pattern[2] in USERPAGE_SUBSTANCE_LIST_FIELDS:
         return {"item": "str"}
