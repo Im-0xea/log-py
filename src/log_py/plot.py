@@ -95,15 +95,18 @@ def plot_plasma_concentrations(
     main_font: str = DEFAULT_MAIN_FONT,
     legend_font: str = DEFAULT_LEGEND_FONT,
     carry_over: timedelta | None = DEFAULT_CARRY_OVER,
+    dose_markers: bool = True,
 ) -> list[str]:
     """Render the estimated plasma concentrations of ``ingestions`` to ``output``.
 
     ``start`` defaults to the earliest ingestion and ``stop`` to now. The
     substances plotted are those dosed inside that window; doses of the same
     substances up to ``carry_over`` before the window also contribute to the
-    curves, so a plot starting mid-dose does not begin at zero. Returns the
-    names of the substances that were plotted, sorted by name; an empty list
-    means the window held no ingestions (an empty plot is still written).
+    curves, so a plot starting mid-dose does not begin at zero. With
+    ``dose_markers`` every dose inside the window is marked by a vertical line
+    in its substance's colour. Returns the names of the substances that were
+    plotted, sorted by name; an empty list means the window held no ingestions
+    (an empty plot is still written).
     """
     _require_matplotlib()
     if blood_volume <= 0.0:
@@ -132,10 +135,17 @@ def plot_plasma_concentrations(
 
     grid = _sample_times(start, stop, samples)
     curves = [_concentration_curve(grouped[name], grid, blood_volume) for name in substances]
+    markers = [
+        (_aware(ingestion.timestamp), index)
+        for index, name in enumerate(substances)
+        for ingestion in grouped[name]
+        if start <= _aware(ingestion.timestamp) <= stop
+    ] if dose_markers else []
     _render(
         substances,
         curves,
         grid,
+        markers,
         start,
         stop,
         Path(output),
@@ -345,6 +355,7 @@ def _render(
     substances: list[str],
     curves: list,
     grid_seconds,
+    markers: list[tuple[datetime, int]],
     start: datetime,
     stop: datetime,
     output: Path,
@@ -451,6 +462,16 @@ def _render(
     ax.tick_params(axis="x", pad=main_size)
     ax.grid(True, which="major", linestyle=(0, (3, 3)), linewidth=0.5, color=grid_color)
     ax.set_axisbelow(False)
+
+    # One vertical line per dose, in the colour of its substance.
+    for moment, color_index in markers:
+        ax.axvline(
+            mdates.date2num(moment.astimezone(LOCAL_TZ)),
+            color=palette[color_index % len(palette)],
+            linewidth=0.8,
+            linestyle=(0, (4, 2)),
+            alpha=0.9,
+        )
 
     if handles:
         legend = ax.legend(
