@@ -481,7 +481,13 @@ def _render(
             labels,
             loc="upper right",
             ncol=max(1, math.ceil(len(handles) / 15)),
-            frameon=False,
+            # An opaque box in the background colour keeps the dose markers
+            # and grid from cutting through the legend text.
+            frameon=True,
+            facecolor=background if background else "white",
+            edgecolor="none",
+            framealpha=1.0,
+            borderpad=0.4,
             markerfirst=False,
             handlelength=1.0,
             handleheight=0.7,
@@ -491,6 +497,7 @@ def _render(
             borderaxespad=0.3,
             prop={"family": [legend_family, "monospace"], "size": legend_size},
         )
+        legend.set_zorder(10)
         for text in legend.get_texts():
             text.set_color(text_color)
 
