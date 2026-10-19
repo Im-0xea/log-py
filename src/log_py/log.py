@@ -5165,9 +5165,56 @@ def _site_choice_label(value: str, count_key: str, counts: dict[str, tuple[int, 
     return f"{value} {_format_site_usage_label(usage)}"
 
 
-def _prompt_for_site(roa: str, current: str | None = None) -> str | None:
+def _read_logged_sites(logfile: Path, route_matches) -> list[str]:
+    """Sites logged for routes accepted by `route_matches`, newest first."""
+    if not logfile.exists():
+        return []
+    sites: list[tuple[datetime, str]] = []
+    with open(logfile, newline="") as infile:
+        for row in csv.reader(infile):
+            if len(row) <= 5 or row[0].strip().lower() == "timestamp":
+                continue
+            site = row[5].strip()
+            parsed_time = _parse_log_timestamp(row[0])
+            if not site or parsed_time is None or not route_matches(_format_route_for_log(row[4])):
+                continue
+            sites.append((parsed_time, site))
+    ordered: list[str] = []
+    # _append_recent_unique moves each site to the front, so walking the log
+    # oldest first leaves the most recently used site at the top.
+    for _, site in sorted(sites, key=lambda item: item[0]):
+        _append_recent_unique(ordered, site)
+    return ordered
+
+
+def _custom_site_choices(logged: list[str], builtin: list[str]) -> list[str]:
+    """Logged sites that are not among the built-in choices (typed-in sites)."""
+    known = {_alias_key(choice) for choice in builtin}
+    return [site for site in logged if _alias_key(site) not in known]
+
+
+def _custom_vein_choices(logfile: Path) -> list[str]:
+    """Veins typed into the intravenous Vein prompt before, without their side."""
+    veins = []
+    for site in _read_logged_sites(logfile, _is_intravenous_route):
+        vein, _ = _split_iv_site(site)
+        if vein:
+            _append_recent_unique(veins, vein)
+    return _custom_site_choices(veins, [UNKNOWN_SITE_CHOICE, *IV_SITE_BASES])
+
+
+def _custom_intranasal_site_choices(logfile: Path) -> list[str]:
+    return _custom_site_choices(
+        _read_logged_sites(logfile, _is_intranasal_route),
+        [UNKNOWN_SITE_CHOICE, *INTRANASAL_SITE_CHOICES],
+    )
+
+
+def _prompt_for_site(roa: str, current: str | None = None, logfile: Path | None = None) -> str | None:
     if _is_intranasal_route(roa):
         choices = [UNKNOWN_SITE_CHOICE, *INTRANASAL_SITE_CHOICES]
+        if logfile is not None:
+            choices.extend(_custom_intranasal_site_choices(logfile))
         _print_prompt_choices("Site", choices)
         site = _prompt_for_value("Site", current or choices[0], optional=True)
         try:
@@ -5201,6 +5248,7 @@ def _menu_for_site(
         candidates = [current] if current and not _is_unknown_site(current) else []
         candidates.append(UNKNOWN_SITE_CHOICE)
         candidates.extend(INTRANASAL_SITE_CHOICES)
+        candidates.extend(_custom_intranasal_site_choices(logfile))
         site = _menu_for_value(
             executable,
             "Site",
@@ -5222,6 +5270,7 @@ def _menu_for_site(
     vein_candidates = [current_vein] if current_vein else []
     vein_candidates.append(UNKNOWN_SITE_CHOICE)
     vein_candidates.extend(IV_SITE_BASES)
+    vein_candidates.extend(_custom_vein_choices(logfile))
     while True:
         vein = _menu_for_value(
             executable,
@@ -5809,7 +5858,7 @@ def _collect_input(
         elif _route_uses_needle(roa):
             selected_syringe = _interactive_uncounted_supply(mode, "Syringe", "syringes", logfile)
             selected_needle = _interactive_uncounted_supply(mode, "Needle", "needles", logfile)
-        site = _prompt_for_site(roa, site)
+        site = _prompt_for_site(roa, site, logfile)
         substances, dosages, salts = _collect_substances_prompt(
             substance,
             dosage,
