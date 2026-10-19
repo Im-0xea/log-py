@@ -354,6 +354,7 @@ IV_SITE_CHOICES = [
     for choice in (f"left-{site}", f"right-{site}")
 ]
 IV_SITE_SIDES = ["left", "right"]
+INTRANASAL_SITE_CHOICES = ["left-nostril", "right-nostril"]
 IV_SITE_WIKIPEDIA_ARTICLES = {
     "median-cubital": "Median_cubital_vein",
     "cephalic": "Cephalic_vein",
@@ -3056,6 +3057,10 @@ def _is_intravenous_route(roa: str) -> bool:
     return (_resolve_alias(roa, ROA_ALIASES) or roa) == "intravenous"
 
 
+def _is_intranasal_route(roa: str) -> bool:
+    return (_resolve_alias(roa, ROA_ALIASES) or roa) == "intranasal"
+
+
 def _route_uses_needle(roa: str) -> bool:
     return _is_injection_route(_resolve_alias(roa, ROA_ALIASES) or roa)
 
@@ -5127,10 +5132,13 @@ def _read_site_usage_counts(logfile: Path) -> dict[str, tuple[int, int, int, int
             if row_date is None:
                 continue
             roa = _format_route_for_log(row[4])
-            if not _is_intravenous_route(roa):
-                continue
             site = row[5].strip()
             if not site:
+                continue
+            if _is_intranasal_route(roa):
+                _increment_site_counts(counts, site, row_date, today)
+                continue
+            if not _is_intravenous_route(roa):
                 continue
             vein, side = _split_iv_site(site)
             if not vein:
@@ -5158,6 +5166,17 @@ def _site_choice_label(value: str, count_key: str, counts: dict[str, tuple[int, 
 
 
 def _prompt_for_site(roa: str, current: str | None = None) -> str | None:
+    if _is_intranasal_route(roa):
+        choices = [UNKNOWN_SITE_CHOICE, *INTRANASAL_SITE_CHOICES]
+        _print_prompt_choices("Site", choices)
+        site = _prompt_for_value("Site", current or choices[0], optional=True)
+        try:
+            selected_index = int(site or "")
+        except ValueError:
+            return None if _is_unknown_site(site) else site
+        if selected_index < 1 or selected_index > len(choices):
+            raise typer.BadParameter("Site selection out of range")
+        return None if selected_index == 1 else choices[selected_index - 1]
     if not _is_intravenous_route(roa):
         return current
     current_vein, current_side = _split_iv_site(current)
@@ -5177,6 +5196,25 @@ def _menu_for_site(
     current: str | None = None,
     allow_back: bool = False,
 ) -> str | None:
+    if _is_intranasal_route(roa):
+        site_counts = _read_site_usage_counts(logfile)
+        candidates = [current] if current and not _is_unknown_site(current) else []
+        candidates.append(UNKNOWN_SITE_CHOICE)
+        candidates.extend(INTRANASAL_SITE_CHOICES)
+        site = _menu_for_value(
+            executable,
+            "Site",
+            current,
+            candidates=candidates,
+            labels_by_value={
+                choice: _site_choice_label(choice, choice, site_counts) for choice in INTRANASAL_SITE_CHOICES
+            },
+            optional=True,
+            allow_back=allow_back,
+        )
+        if not site or _is_unknown_site(site):
+            return UNKNOWN_SITE_CHOICE if site else None
+        return site
     if not _is_intravenous_route(roa):
         return current
     current_vein, current_side = _split_iv_site(current)
