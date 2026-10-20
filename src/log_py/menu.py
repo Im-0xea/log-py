@@ -18,6 +18,7 @@ from typing import Callable
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 con = Console()
 err_con = Console(stderr=True)
@@ -411,7 +412,9 @@ def _prompt_mode_choice(label: str, current: str, aliases: dict[str, list[str]])
 def _print_prompt_choices(label: str, choices: list[str]) -> None:
     con.print(f"{label}:")
     for index, choice in enumerate(choices, 1):
-        con.print(f"{index}. {choice}")
+        # Choices such as "50mg Ketamine [hydrochloride] oral" carry brackets
+        # that Rich would otherwise read as markup.
+        con.print(f"{index}. {escape(choice)}")
 
 def _interactive_choice(
     mode: InputMode,

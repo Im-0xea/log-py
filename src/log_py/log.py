@@ -117,6 +117,10 @@ ACTION_STATISTICS = "Statistics"
 ACTION_HISTORY = "History"
 ACTION_USERPAGE = "Userpage"
 ACTION_PLOT = "Plot"
+# First prompt of "Add ingestion": start from scratch or repeat a logged
+# combination of route, substances, forms and dosage.
+REPEAT_NEW_CHOICE = "New ingestion"
+REPEAT_COMBINATION_LIMIT = 20
 USERPAGE_ADD_KEY_CHOICE = "Add key"
 USERPAGE_ADD_ITEM_CHOICE = "Add item"
 USERPAGE_REMOVE_CHOICE = "Remove"
@@ -245,6 +249,7 @@ COUNT_STASH = False
 # names, resolved by fuzzel through its configured icon theme.
 MENU_ICONS.update({
     ACTION_LOG_INGESTION: "list-add-symbolic",
+    REPEAT_NEW_CHOICE: "document-new-symbolic",
     ACTION_EDIT_SUPPLY_STACK: "applications-science-symbolic",
     ACTION_EDIT_STASH: "package-x-generic-symbolic",
     ACTION_HISTORY: "document-open-recent-symbolic",
@@ -5778,6 +5783,145 @@ def _format_collected_substances(
     return kind, substance, dosage, salt
 
 
+def _recent_combinations(logfile: Path) -> list[list[str]]:
+    """Distinct (route, substances, dosage, forms) of the newest logs, newest first."""
+    rows = [row for row in _read_log_rows(logfile) if len(row) > 4 and not _is_log_header_row(row)]
+    rows.sort(key=lambda row: _parse_log_timestamp(row[0]) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    seen = set()
+    combinations = []
+    for row in rows:
+        padded = _padded_log_row(row)
+        if not padded[2].strip() or not padded[3].strip() or not padded[4].strip():
+            continue
+        key = tuple(_alias_key(padded[index]) for index in (4, 2, 3, 6))
+        if key in seen:
+            continue
+        seen.add(key)
+        combinations.append(padded)
+        if len(combinations) >= REPEAT_COMBINATION_LIMIT:
+            break
+    return combinations
+
+
+def _combination_label(row: list[str]) -> str:
+    """"<dosage> <substance> [<form>] <route>" for the repeat prompt."""
+    padded = _padded_log_row(row)
+    parts = [padded[3], padded[2]]
+    if padded[6]:
+        parts.append(f"[{padded[6]}]")
+    parts.append(padded[4])
+    return " ".join(part for part in parts if part)
+
+
+def _select_repeat_combination(mode: InputMode, logfile: Path, allow_back: bool) -> list[str] | None:
+    """Ask whether to repeat a logged combination; None means a new ingestion.
+
+    Raises IngestionCancelled when the user backs out to the main menu."""
+    combinations = _recent_combinations(logfile)
+    if not combinations:
+        return None
+    keys = [str(index) for index in range(len(combinations))]
+    labels = {key: _combination_label(row) for key, row in zip(keys, combinations)}
+    choices = [REPEAT_NEW_CHOICE, *keys]
+    if mode == InputMode.prompt:
+        if allow_back:
+            con.print(f"Enter {BACK_CHOICE} to return to the main menu")
+        _print_prompt_choices(ACTION_LOG_INGESTION, [labels.get(choice, choice) for choice in choices])
+        value = _prompt_for_value(ACTION_LOG_INGESTION, REPEAT_NEW_CHOICE, optional=False)
+        if allow_back and value and _alias_key(value) == _alias_key(BACK_CHOICE):
+            raise IngestionCancelled
+        try:
+            selected_index = int(value or "")
+        except ValueError:
+            if value and _alias_key(value) != _alias_key(REPEAT_NEW_CHOICE):
+                for key, label in labels.items():
+                    if value == label:
+                        return combinations[int(key)]
+                raise typer.BadParameter(f"Unknown choice: {value}")
+            return None
+        if selected_index < 1 or selected_index > len(choices):
+            raise typer.BadParameter(f"{ACTION_LOG_INGESTION} selection out of range")
+        selected = choices[selected_index - 1]
+    else:
+        try:
+            selected = _menu_for_value(
+                mode.value,
+                ACTION_LOG_INGESTION,
+                REPEAT_NEW_CHOICE,
+                candidates=choices,
+                labels_by_value=labels,
+                allow_back=allow_back,
+            )
+        except BackRequested:
+            raise IngestionCancelled from None
+    if not selected or selected == REPEAT_NEW_CHOICE:
+        return None
+    return combinations[int(selected)] if selected in labels else None
+
+
+def _collect_repeat_input(
+    mode: InputMode,
+    logfile: Path,
+    row: list[str],
+) -> tuple[LogKind, str, str, str, str | None, str | None, str | None, str | None]:
+    """Log a previous combination again: only site, supplies and the extra
+    options (note, time) are asked. Raises BackRequested to return to the
+    combination prompt."""
+    padded = _padded_log_row(row)
+    substance, dosage, salt = padded[2], padded[3], padded[6] or None
+    roa = _format_route_for_log(padded[4]) or padded[4].strip().casefold()
+    if _is_mixture_value(substance):
+        kind = LogKind.mixture
+    elif "@" in dosage:
+        kind = LogKind.solution
+    else:
+        kind = LogKind.single
+
+    if mode == InputMode.prompt:
+        selected_syringe = selected_needle = None
+        if _route_uses_needle(roa) and COUNT_SUPPLIES:
+            selected_syringe = _prompt_for_supply_entry("Syringe", "syringes")
+            selected_needle = _prompt_for_supply_entry("Needle", "needles")
+        elif _route_uses_needle(roa):
+            selected_syringe = _interactive_uncounted_supply(mode, "Syringe", "syringes", logfile)
+            selected_needle = _interactive_uncounted_supply(mode, "Needle", "needles", logfile)
+        site = _prompt_for_site(roa, None, logfile)
+        note, time, _ = _prompt_for_extra_info(None, None)
+    else:
+        menu = mode.value
+        selected_syringe = selected_needle = None
+        site = note = time = None
+        steps = []
+        if _route_uses_needle(roa):
+            steps.append("supplies")
+        if _is_intravenous_route(roa) or _is_intranasal_route(roa):
+            steps.append("site")
+        steps.append("extra")
+        index = 0
+        while index < len(steps):
+            step = steps[index]
+            try:
+                if step == "supplies" and COUNT_SUPPLIES:
+                    selected_syringe = _menu_for_supply_entry(menu, "Syringe", "syringes", allow_back=True)
+                    selected_needle = _menu_for_supply_entry(menu, "Needle", "needles", allow_back=True)
+                elif step == "supplies":
+                    selected_syringe = _interactive_uncounted_supply(mode, "Syringe", "syringes", logfile, allow_back=True)
+                    selected_needle = _interactive_uncounted_supply(mode, "Needle", "needles", logfile, allow_back=True)
+                elif step == "site":
+                    site = _menu_for_site(menu, logfile, roa, None, allow_back=True)
+                else:
+                    note, time, _ = _menu_for_extra_info(menu, None, None, allow_back=True)
+            except BackRequested:
+                if index == 0:
+                    raise
+                index -= 1
+                continue
+            index += 1
+    if _route_uses_needle(roa):
+        note = _append_note_supply_entries(note, selected_syringe, selected_needle)
+    return kind, substance, dosage, roa, site, salt, note, time
+
+
 def _collect_input(
     mode: InputMode,
     logfile: Path,
@@ -5841,6 +5985,16 @@ def _collect_input(
             )
         kind = LogKind.solution if "@" in dosage else LogKind.single
         return kind, substance, dosage, roa, site, salt, note, time
+
+    if not (substance or dosage or roa):
+        while True:
+            combination = _select_repeat_combination(mode, logfile, allow_back_to_menu)
+            if combination is None:
+                break
+            try:
+                return _collect_repeat_input(mode, logfile, combination)
+            except BackRequested:
+                continue
 
     if mode == InputMode.prompt:
         if allow_back_to_menu:
