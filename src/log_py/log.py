@@ -360,6 +360,9 @@ IV_SITE_CHOICES = [
 ]
 IV_SITE_SIDES = ["left", "right"]
 INTRANASAL_SITE_CHOICES = ["left-nostril", "right-nostril"]
+# "Unknown" logs the site as unknown (unlike Skip, which leaves it empty).
+UNKNOWN_SITE_VALUE_CHOICE = "Unknown"
+UNKNOWN_SITE_VALUE = "unknown"
 IV_SITE_WIKIPEDIA_ARTICLES = {
     "median-cubital": "Median_cubital_vein",
     "cephalic": "Cephalic_vein",
@@ -5043,7 +5046,13 @@ def _is_unknown_site(site: str | None) -> bool:
     return _is_skip_choice(site)
 
 
+def _is_unknown_site_value(site: str | None) -> bool:
+    return bool(site) and _alias_key(site) == _alias_key(UNKNOWN_SITE_VALUE)
+
+
 def _logged_site(site: str | None) -> str | None:
+    if _is_unknown_site_value(site):
+        return UNKNOWN_SITE_VALUE
     if _is_unknown_site(site):
         return ""
     return site
@@ -5205,19 +5214,19 @@ def _custom_vein_choices(logfile: Path) -> list[str]:
         vein, _ = _split_iv_site(site)
         if vein:
             _append_recent_unique(veins, vein)
-    return _custom_site_choices(veins, [UNKNOWN_SITE_CHOICE, *IV_SITE_BASES])
+    return _custom_site_choices(veins, [UNKNOWN_SITE_CHOICE, UNKNOWN_SITE_VALUE, *IV_SITE_BASES])
 
 
 def _custom_intranasal_site_choices(logfile: Path) -> list[str]:
     return _custom_site_choices(
         _read_logged_sites(logfile, _is_intranasal_route),
-        [UNKNOWN_SITE_CHOICE, *INTRANASAL_SITE_CHOICES],
+        [UNKNOWN_SITE_CHOICE, UNKNOWN_SITE_VALUE, *INTRANASAL_SITE_CHOICES],
     )
 
 
 def _prompt_for_site(roa: str, current: str | None = None, logfile: Path | None = None) -> str | None:
     if _is_intranasal_route(roa):
-        choices = [UNKNOWN_SITE_CHOICE, *INTRANASAL_SITE_CHOICES]
+        choices = [UNKNOWN_SITE_CHOICE, UNKNOWN_SITE_VALUE_CHOICE, *INTRANASAL_SITE_CHOICES]
         if logfile is not None:
             choices.extend(_custom_intranasal_site_choices(logfile))
         _print_prompt_choices("Site", choices)
@@ -5225,16 +5234,23 @@ def _prompt_for_site(roa: str, current: str | None = None, logfile: Path | None 
         try:
             selected_index = int(site or "")
         except ValueError:
+            if _is_unknown_site_value(site):
+                return UNKNOWN_SITE_VALUE
             return None if _is_unknown_site(site) else site
         if selected_index < 1 or selected_index > len(choices):
             raise typer.BadParameter("Site selection out of range")
-        return None if selected_index == 1 else choices[selected_index - 1]
+        if selected_index == 1:
+            return None
+        site = choices[selected_index - 1]
+        return UNKNOWN_SITE_VALUE if site == UNKNOWN_SITE_VALUE_CHOICE else site
     if not _is_intravenous_route(roa):
         return current
     current_vein, current_side = _split_iv_site(current)
     vein = _prompt_for_value("Vein", current_vein, optional=True)
     if not vein:
         return None
+    if _is_unknown_site_value(vein):
+        return UNKNOWN_SITE_VALUE
     if _is_unknown_site(vein):
         return UNKNOWN_SITE_CHOICE
     side = _prompt_for_value("Side", current_side, optional=False)
@@ -5252,6 +5268,7 @@ def _menu_for_site(
         site_counts = _read_site_usage_counts(logfile)
         candidates = [current] if current and not _is_unknown_site(current) else []
         candidates.append(UNKNOWN_SITE_CHOICE)
+        candidates.append(UNKNOWN_SITE_VALUE_CHOICE)
         candidates.extend(INTRANASAL_SITE_CHOICES)
         candidates.extend(_custom_intranasal_site_choices(logfile))
         site = _menu_for_value(
@@ -5265,6 +5282,8 @@ def _menu_for_site(
             optional=True,
             allow_back=allow_back,
         )
+        if _is_unknown_site_value(site):
+            return UNKNOWN_SITE_VALUE
         if not site or _is_unknown_site(site):
             return UNKNOWN_SITE_CHOICE if site else None
         return site
@@ -5274,6 +5293,7 @@ def _menu_for_site(
     site_counts = _read_site_usage_counts(logfile)
     vein_candidates = [current_vein] if current_vein else []
     vein_candidates.append(UNKNOWN_SITE_CHOICE)
+    vein_candidates.append(UNKNOWN_SITE_VALUE_CHOICE)
     vein_candidates.extend(IV_SITE_BASES)
     vein_candidates.extend(_custom_vein_choices(logfile))
     while True:
@@ -5287,6 +5307,8 @@ def _menu_for_site(
         )
         if not vein:
             return None
+        if _is_unknown_site_value(vein):
+            return UNKNOWN_SITE_VALUE
         if _is_unknown_site(vein):
             return UNKNOWN_SITE_CHOICE
         side_candidates = [current_side] if current_side else []

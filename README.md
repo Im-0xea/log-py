@@ -190,7 +190,7 @@ The "Plot" action of the main menu draws the estimated blood plasma concentratio
 | `--needle-gauge` | | needle gauge appended to the note for injection routes |
 | `--needle-length` | | needle length appended to the note for injection routes |
 | `--salt` | `-sa` | salt form |
-| `--site` | `-si` | site of administration; prompted for intravenous routes (vein and side) and intranasal routes (`left-nostril` / `right-nostril`); sites typed in before are offered again, newest first |
+| `--site` | `-si` | site of administration; prompted for intravenous routes (vein and side) and intranasal routes (`left-nostril` / `right-nostril`); "Skip" leaves it empty, "Unknown" logs `unknown`, and sites typed in before are offered again, newest first |
 | `--note` | `-n` | note, added to the Discord message and CSV |
 | `--csv` | | CSV file to write to |
 | `--user` | `-u` | username |
