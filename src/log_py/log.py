@@ -151,9 +151,6 @@ USERPAGE_SUBSTANCE_LIST_FIELDS = [
     "Classes", "Salts", "Sources", "Indication", "Tolerance", "Effects", "After", "Odor", "Notes",
 ]
 JSON_ENTRY_PREFIX = "entry:"
-HISTORY_PAGE_SIZE = 100
-HISTORY_NEXT_CHOICE = f"Next {HISTORY_PAGE_SIZE}"
-HISTORY_GOTO_CHOICE = "Goto Page: ?"
 HISTORY_BROWSE_CHOICE = "Browse Logs"
 HISTORY_IMPORT_CHOICE = "Import Journal Export"
 HISTORY_WIPE_CHOICE = "Wipe logs"
@@ -277,8 +274,6 @@ MENU_ICONS.update({
     DONE_SUBSTANCE_CHOICE: "go-next-symbolic",
     SKIP_CHOICE: "go-jump-symbolic",
     LEGACY_UNKNOWN_CHOICE: "dialog-question-symbolic",
-    HISTORY_NEXT_CHOICE: "go-down-symbolic",
-    HISTORY_GOTO_CHOICE: "go-jump-symbolic",
     HISTORY_BROWSE_CHOICE: "view-list-symbolic",
     HISTORY_IMPORT_CHOICE: "document-open-symbolic",
     HISTORY_WIPE_CHOICE: "edit-delete-symbolic",
@@ -4692,32 +4687,6 @@ def _edit_history_entry(mode: InputMode, logfile: Path, row_index: int, webhook:
         raise typer.BadParameter(f"Unknown history action: {action}")
 
 
-def _prompt_history_page(mode: InputMode, page_number: int, page_count: int) -> int | None:
-    """Ask for a history page number; None when cancelled or invalid."""
-    label = f"Page (1-{page_count})"
-    if mode == InputMode.prompt:
-        text = _prompt_for_value(label, str(page_number), optional=True)
-    else:
-        text = _menu_for_value(
-            mode.value,
-            label,
-            str(page_number),
-            candidates=[str(number) for number in range(1, page_count + 1)],
-            optional=True,
-        )
-    if text is None:
-        return None
-    try:
-        target = int(text.strip())
-    except ValueError:
-        err_con.print(f"'{text}' is not a page number", style="bold yellow")
-        return None
-    if target < 1 or target > page_count:
-        err_con.print(f"Page {target} is out of range (1-{page_count})", style="bold yellow")
-        return None
-    return target
-
-
 def _journal_substance_title(name: str, titles: dict[str, str]) -> str:
     """The AnodyneWiki title for a Journal substance name: from the local
     substance cache when known, else from the API (cached), else the name."""
@@ -4885,39 +4854,19 @@ def _history_menu(mode: InputMode, logfile: Path, webhook: HttpUrl | None, userp
 
 
 def _show_history(mode: InputMode, logfile: Path, webhook: HttpUrl | None, userpage: str | None) -> None:
-    offset = 0
+    """Every logged ingestion in one list, newest first."""
     while True:
         rows = _read_log_rows(logfile)
         entries = [(index, row) for index, row in enumerate(rows) if row and not _is_log_header_row(row)]
         entries.reverse()
-        page = entries[offset:offset + HISTORY_PAGE_SIZE]
-        if not page and offset:
-            offset = max(0, offset - HISTORY_PAGE_SIZE)
-            continue
-        if not page:
+        if not entries:
             con.print("No logs found.")
             return
-        choices = [str(index) for index, _ in page]
-        labels_by_value = {str(index): _history_entry_label(row) for index, row in page}
-        page_number = offset // HISTORY_PAGE_SIZE + 1
-        page_count = (len(entries) + HISTORY_PAGE_SIZE - 1) // HISTORY_PAGE_SIZE
-        if offset + HISTORY_PAGE_SIZE < len(entries):
-            choices.append(HISTORY_NEXT_CHOICE)
-            labels_by_value[HISTORY_NEXT_CHOICE] = HISTORY_NEXT_CHOICE
-        if page_count > 1:
-            choices.append(HISTORY_GOTO_CHOICE)
-            labels_by_value[HISTORY_GOTO_CHOICE] = HISTORY_GOTO_CHOICE
-        selected = _select_statistics_choice(mode, f"History ({page_number} of {page_count})", choices, labels_by_value)
+        choices = [str(index) for index, _ in entries]
+        labels_by_value = {str(index): _history_entry_label(row) for index, row in entries}
+        selected = _select_statistics_choice(mode, f"History ({len(entries)})", choices, labels_by_value)
         if selected == BACK_CHOICE:
             return
-        if selected == HISTORY_NEXT_CHOICE:
-            offset += HISTORY_PAGE_SIZE
-            continue
-        if selected == HISTORY_GOTO_CHOICE:
-            target = _prompt_history_page(mode, page_number, page_count)
-            if target is not None:
-                offset = (target - 1) * HISTORY_PAGE_SIZE
-            continue
         if selected not in labels_by_value:
             raise typer.BadParameter(f"Unknown log entry: {selected}")
         _edit_history_entry(mode, logfile, int(selected), webhook, userpage)
