@@ -77,6 +77,8 @@ An ingestion logged after the fact, with `--set-time`, `--offset-time` or a past
 
 In prompt and menu modes "Add ingestion" first asks whether to start a "New ingestion" or repeat one of the last 20 distinct combinations of dosage, substances, forms and route from the log, shown as `50mg Ketamine [hydrochloride] intramuscular`. Repeating one skips the route, substance, dosage and form prompts and only asks for the site (where the route has one), the syringe and needle (for injection routes) and the extra options (note and time), so the same combination can be logged again at another time or site. The prompt is skipped when substance, dosage or route were given as arguments.
 
+Before every Dosage prompt a "Dosage accuracy" prompt offers Skip, `weighed`, `eyeballed`, `guess` and `formulated`; anything but Skip is appended to the note as `accuracy:weighed` (for a mixture, one value when all components agree, otherwise the values joined with `/` in substance order). The Dosage prompt lists previously logged dosages without their `~` marker.
+
 Dosage prompts accept simple arithmetic expressions for numeric amounts, e.g. entering `90 / 2` and unit `mg` logs `45mg`. Expressions also work in argument mode (a lone `100/3mg` or `50+10mg` is arithmetic, not a mixture) and may be prefixed with `~` to mark an approximate dosage, e.g. `~25*2mg` logs and posts `~50mg`. Dosage amounts are rounded to two decimals before being logged and posted, so `100/3mg` becomes `33.33mg`.
 
 Track virtual syringe and needle supply counts:

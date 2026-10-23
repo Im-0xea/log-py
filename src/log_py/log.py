@@ -1233,6 +1233,10 @@ NOTE_REUSED_SYRINGE_RE = re.compile(r"(?:^|\s)reused-syringe(?:\s|$)")
 NOTE_REUSED_NEEDLE_RE = re.compile(r"(?:^|\s)reused-needle(?:\s|$)")
 NOTE_NON_DISPOSABLE_SYRINGE_RE = re.compile(r"(?:^|\s)non-disposable-syringe(?:\s|$)")
 NOTE_BACKLOGGED_RE = re.compile(r"(?:^|\s)backlogged:(?P<elapsed>[^\s]+)")
+# "Dosage accuracy" prompt before every Dosage prompt; anything but Skip is
+# noted as "accuracy:<value>" (values of a mixture joined with "/").
+DOSAGE_ACCURACY_CHOICES = ["weighed", "eyeballed", "guess", "formulated"]
+NOTE_ACCURACY_RE = re.compile(r"(?:^|\s)accuracy:(?P<accuracy>[^\s]+)")
 # Ingestions given an explicit time at least this far in the past get a
 # "backlogged:<elapsed>" note token.
 BACKLOG_MIN_DELAY = timedelta(minutes=1)
@@ -1346,6 +1350,71 @@ def _append_note_backlog(note: str | None, ingestion_time: datetime, explicit_ti
         return note
     token = f"backlogged:{_format_elapsed(delay).replace(' ', '')}"
     return _append_note_token(note, token, NOTE_BACKLOGGED_RE)
+
+
+def _append_note_accuracy(note: str | None, accuracies: list[str | None]) -> str | None:
+    """Add "accuracy:<value>" for the dosage accuracies given (Skip leaves none).
+
+    One value when every component agrees, otherwise the per-substance values
+    joined with "/" in substance order (a skipped component reads "skip").
+    """
+    given = [accuracy for accuracy in accuracies if accuracy]
+    if not given:
+        return note
+    if len(set(given)) == 1 and len(given) == len(accuracies):
+        value = given[0]
+    else:
+        value = "/".join(accuracy or "skip" for accuracy in accuracies)
+    return _append_note_token(note, f"accuracy:{value}", NOTE_ACCURACY_RE)
+
+
+def _dosage_choice_candidates(logged: list[str]) -> list[str]:
+    """Logged dosages for the Dosage prompt without the "~" guess marker, deduplicated."""
+    candidates: list[str] = []
+    for dosage in logged:
+        stripped = _strip_dosage_guess_marker(dosage) or ""
+        if stripped and stripped not in candidates:
+            candidates.append(stripped)
+    return candidates
+
+
+def _prompt_for_dosage_accuracy() -> str | None:
+    choices = [SKIP_CHOICE, *DOSAGE_ACCURACY_CHOICES]
+    _print_prompt_choices("Dosage accuracy", choices)
+    value = _prompt_for_value("Dosage accuracy", SKIP_CHOICE, optional=True)
+    if not value:
+        return None
+    try:
+        selected_index = int(value)
+    except ValueError:
+        if _is_skip_choice(value):
+            return None
+        key = _alias_key(value)
+        for choice in DOSAGE_ACCURACY_CHOICES:
+            if _alias_key(choice) == key:
+                return choice
+        raise typer.BadParameter(f"Unknown dosage accuracy: {value}")
+    if selected_index < 1 or selected_index > len(choices):
+        raise typer.BadParameter("Dosage accuracy selection out of range")
+    return None if selected_index == 1 else choices[selected_index - 1]
+
+
+def _menu_for_dosage_accuracy(executable: str, allow_back: bool = False) -> str | None:
+    value = _menu_for_value(
+        executable,
+        "Dosage accuracy",
+        SKIP_CHOICE,
+        candidates=[SKIP_CHOICE, *DOSAGE_ACCURACY_CHOICES],
+        optional=True,
+        allow_back=allow_back,
+    )
+    if not value or _is_skip_choice(value):
+        return None
+    key = _alias_key(value)
+    for choice in DOSAGE_ACCURACY_CHOICES:
+        if _alias_key(choice) == key:
+            return choice
+    return value.strip()
 
 
 def _append_note_token(note: str | None, token: str, pattern: re.Pattern) -> str | None:
@@ -5574,10 +5643,11 @@ def _collect_substances_prompt(
     substance: str | None,
     dosage: str | None,
     salt: str | None,
-) -> tuple[list[str], list[str], list[str | None]]:
+) -> tuple[list[str], list[str], list[str | None], list[str | None]]:
     substances = []
     dosages = []
     salts = []
+    accuracies: list[str | None] = []
     seeded_substances = _split_mixture_values(substance)
     seeded_dosages = _split_mixture_values(dosage)
     seeded_salts = _split_mixture_values(salt)
@@ -5603,6 +5673,7 @@ def _collect_substances_prompt(
             break
 
         substances.append(_resolve_alias(component_substance, SUBSTANCE_ALIASES) or component_substance)
+        accuracies.append(_prompt_for_dosage_accuracy())
         dosages.append(_prompt_for_dosage("Dosage", current_dosage))
         salts.append(
             _resolve_alias(
@@ -5611,7 +5682,7 @@ def _collect_substances_prompt(
             )
         )
 
-    return substances, dosages, salts
+    return substances, dosages, salts, accuracies
 
 
 def _collect_substances_menu(
@@ -5621,10 +5692,11 @@ def _collect_substances_menu(
     dosage: str | None,
     salt: str | None,
     allow_back: bool = False,
-) -> tuple[list[str], list[str], list[str | None]]:
+) -> tuple[list[str], list[str], list[str | None], list[str | None]]:
     substances = []
     dosages = []
     salts = []
+    accuracies: list[str | None] = []
     seeded_substances = _split_mixture_values(substance)
     seeded_dosages = _split_mixture_values(dosage)
     seeded_salts = _split_mixture_values(salt)
@@ -5673,52 +5745,63 @@ def _collect_substances_menu(
                     dosages.pop()
                 if salts:
                     salts.pop()
+                if accuracies:
+                    accuracies.pop()
                 index = max(index - 2, 0)
                 break
             if component_substance is None or _alias_key(component_substance) == _alias_key(DONE_SUBSTANCE_CHOICE):
-                return substances, dosages, salts
+                return substances, dosages, salts, accuracies
 
-            while True:
+            # Dosage accuracy, Dosage and Form in turn; Back steps to the
+            # previous one, and Back on the first returns to the substance.
+            step = 0
+            component_accuracy = None
+            component_dosage = ""
+            component_salt = None
+            while 0 <= step < 3:
                 try:
-                    component_dosage = _menu_for_dosage(
-                        executable,
-                        "Dosage",
-                        current_dosage,
-                        candidates=_read_logged_dosages_for_substance(logfile, component_substance),
-                        allow_back=allow_back,
-                    )
+                    if step == 0:
+                        component_accuracy = _menu_for_dosage_accuracy(executable, allow_back=allow_back)
+                    elif step == 1:
+                        component_dosage = _menu_for_dosage(
+                            executable,
+                            "Dosage",
+                            current_dosage,
+                            candidates=_dosage_choice_candidates(
+                                _read_logged_dosages_for_substance(logfile, component_substance)
+                            ),
+                            allow_back=allow_back,
+                        )
+                    else:
+                        salt_candidates = [current_salt] if current_salt else []
+                        salt_candidates.extend(SALT_CHOICES)
+                        salt_candidates.extend(_read_logged_salts(logfile))
+                        component_salt = _menu_for_value(
+                            executable,
+                            "Form",
+                            current_salt,
+                            candidates=salt_candidates,
+                            optional=True,
+                            aliases=SALT_ALIASES,
+                            allow_back=allow_back,
+                        )
                 except BackRequested:
-                    break
-
-                salt_candidates = [current_salt] if current_salt else []
-                salt_candidates.extend(SALT_CHOICES)
-                salt_candidates.extend(_read_logged_salts(logfile))
-                try:
-                    component_salt = _menu_for_value(
-                        executable,
-                        "Form",
-                        current_salt,
-                        candidates=salt_candidates,
-                        optional=True,
-                        aliases=SALT_ALIASES,
-                        allow_back=allow_back,
-                    )
-                except BackRequested:
+                    step -= 1
                     continue
-
-                substances.append(component_substance)
-                dosages.append(component_dosage)
-                salts.append(component_salt)
+                step += 1
+            if step < 0:
                 break
-            else:
-                continue
+            substances.append(component_substance)
+            dosages.append(component_dosage)
+            salts.append(component_salt)
+            accuracies.append(component_accuracy)
             if len(substances) == index:
                 break
         if len(substances) != index:
             index = max(index - 1, 0)
             continue
 
-    return substances, dosages, salts
+    return substances, dosages, salts, accuracies
 
 
 def _format_single_solution_component(
@@ -5984,7 +6067,7 @@ def _collect_input(
             selected_syringe = _interactive_uncounted_supply(mode, "Syringe", "syringes", logfile)
             selected_needle = _interactive_uncounted_supply(mode, "Needle", "needles", logfile)
         site = _prompt_for_site(roa, site, logfile)
-        substances, dosages, salts = _collect_substances_prompt(
+        substances, dosages, salts, accuracies = _collect_substances_prompt(
             substance,
             dosage,
             salt,
@@ -6006,6 +6089,7 @@ def _collect_input(
             salts,
             volume,
         )
+        note = _append_note_accuracy(note, accuracies)
         if _route_uses_needle(roa):
             note = _append_note_supply_entries(note, selected_syringe, selected_needle)
         return (
@@ -6061,7 +6145,7 @@ def _collect_input(
                         break
                     while True:
                         try:
-                            substances, dosages, salts = _collect_substances_menu(
+                            substances, dosages, salts, accuracies = _collect_substances_menu(
                                 menu,
                                 logfile,
                                 substance,
@@ -6096,6 +6180,7 @@ def _collect_input(
                                 salts,
                                 volume_ml,
                             )
+                            note = _append_note_accuracy(note, accuracies)
                             if _route_uses_needle(roa):
                                 note = _append_note_supply_entries(note, selected_syringe, selected_needle)
                             return (
