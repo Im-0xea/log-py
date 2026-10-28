@@ -4873,7 +4873,7 @@ def _prompt_effect_value(mode: InputMode, label: str) -> str | None:
         reference = text.strip() if text and text.strip() else None
     elif kind == EFFECT_REF_INDEX:
         effect = _select_statistics_choice(mode, f"{label} / Effect index", list(IE_EFFECTS))
-        reference = f"{{xeff '{effect}'}}" if effect != BACK_CHOICE and effect in IE_EFFECTS else None
+        reference = f"{{xeff '{effect.lower()}'}}" if effect != BACK_CHOICE and effect in IE_EFFECTS else None
     elif kind == EFFECT_REF_WIKIPEDIA:
         article = _prompt_free_text(mode, f"{label} / Wikipedia article")
         reference = f"{{wkp '{article.strip()}'}}" if article and article.strip() else None
